@@ -313,3 +313,43 @@ async def refresh_integration(
         )
 
     return await service.get_integration(integration_id)
+
+
+@router.get(
+    "/health-dashboard",
+    summary="Get Integration Health Dashboard"
+)
+async def get_health_dashboard(
+    workspace_id: UUID = Depends(get_workspace_id),
+    current_user: AuthUser = Depends(get_current_user),
+    service: IntegrationService = Depends(get_integration_service)
+):
+    """
+    Get comprehensive health dashboard for all integrations
+
+    Provides aggregated health metrics and status across all integrations.
+
+    **Query Parameters:**
+    - workspace_id: Workspace UUID (optional, defaults to user's workspace)
+
+    **Returns:**
+    - Health dashboard with:
+      - Total integration count
+      - Healthy/unhealthy breakdown
+      - Success rate
+      - Per-platform health statistics
+      - Recent errors
+
+    **Use Cases:**
+    - Monitoring dashboard
+    - Integration status overview
+    - Troubleshooting and diagnostics
+    """
+    from app.services.health_check_service import HealthCheckService
+    from app.database import get_db
+
+    db = next(get_db())
+    health_service = HealthCheckService(db)
+
+    dashboard = await health_service.get_health_dashboard(workspace_id)
+    return dashboard

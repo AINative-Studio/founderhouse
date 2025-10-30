@@ -397,6 +397,282 @@ def cleanup_after_test():
 
 
 # ============================================================================
+# OAUTH FIXTURES (Sprint 2)
+# ============================================================================
+
+@pytest.fixture
+def mock_oauth_state() -> dict:
+    """Generate mock OAuth state parameter."""
+    from tests.fixtures.integration_fixtures import OAuthStateFactory
+    return OAuthStateFactory()
+
+
+@pytest.fixture
+def mock_oauth_token() -> dict:
+    """Generate mock OAuth token."""
+    from tests.fixtures.integration_fixtures import OAuthTokenFactory
+    return OAuthTokenFactory()
+
+
+@pytest.fixture
+def mock_oauth_service() -> Mock:
+    """Mock OAuth service for testing."""
+    mock = Mock()
+    mock.generate_authorization_url.return_value = (
+        "https://zoom.us/oauth/authorize?client_id=test&state=abc123",
+        "abc123"
+    )
+    mock.exchange_code_for_token.return_value = {
+        "access_token": "mock_access_token",
+        "refresh_token": "mock_refresh_token",
+        "expires_in": 3600
+    }
+    mock.refresh_token.return_value = {
+        "access_token": "mock_refreshed_token",
+        "expires_in": 3600
+    }
+    mock.validate_state.return_value = True
+    mock.is_token_expired.return_value = False
+    return mock
+
+
+@pytest.fixture
+def mock_oauth_provider_configs() -> dict:
+    """Mock OAuth provider configurations."""
+    return {
+        "zoom": {
+            "client_id": "test_zoom_client_id",
+            "client_secret": "test_zoom_client_secret",
+            "authorization_url": "https://zoom.us/oauth/authorize",
+            "token_url": "https://zoom.us/oauth/token",
+            "scopes": ["meeting:read", "meeting:write"]
+        },
+        "slack": {
+            "client_id": "test_slack_client_id",
+            "client_secret": "test_slack_client_secret",
+            "authorization_url": "https://slack.com/oauth/v2/authorize",
+            "token_url": "https://slack.com/api/oauth.v2.access",
+            "scopes": ["channels:read", "chat:write"]
+        },
+        "discord": {
+            "client_id": "test_discord_client_id",
+            "client_secret": "test_discord_client_secret",
+            "authorization_url": "https://discord.com/api/oauth2/authorize",
+            "token_url": "https://discord.com/api/oauth2/token",
+            "scopes": ["bot", "messages.read"]
+        }
+    }
+
+
+# ============================================================================
+# HEALTH CHECK FIXTURES (Sprint 2)
+# ============================================================================
+
+@pytest.fixture
+def mock_health_check_service() -> AsyncMock:
+    """Mock health check service."""
+    mock = AsyncMock()
+    mock.check_integration.return_value = {
+        "is_healthy": True,
+        "status": "connected",
+        "response_time_ms": 150,
+        "error_message": None
+    }
+    mock.check_all_integrations.return_value = []
+    mock.schedule_health_checks.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_scheduler() -> Mock:
+    """Mock APScheduler for testing scheduled health checks."""
+    mock = Mock()
+    mock.add_job.return_value = None
+    mock.remove_job.return_value = None
+    mock.get_jobs.return_value = []
+    mock.start.return_value = None
+    mock.shutdown.return_value = None
+    return mock
+
+
+# ============================================================================
+# MCP CONNECTOR FIXTURES (Sprint 2)
+# ============================================================================
+
+@pytest.fixture
+def mock_base_connector() -> AsyncMock:
+    """Mock base MCP connector."""
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.test_connection.return_value = True
+    mock.health_check.return_value = {"is_healthy": True}
+    mock.encrypt_credentials.return_value = b"encrypted_data"
+    mock.decrypt_credentials.return_value = {"key": "value"}
+    return mock
+
+
+@pytest.fixture
+def mock_zoom_connector() -> AsyncMock:
+    """Mock Zoom MCP connector with enhanced functionality."""
+    from tests.fixtures.mcp_responses import (
+        get_zoom_user_info,
+        get_zoom_meetings_list
+    )
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "zoom"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.fetch_meetings.return_value = get_zoom_meetings_list()
+    mock.get_user_info.return_value = get_zoom_user_info()
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    mock.refresh_token.return_value = {
+        "access_token": "new_zoom_token",
+        "expires_in": 3600
+    }
+    return mock
+
+
+@pytest.fixture
+def mock_slack_connector() -> AsyncMock:
+    """Mock Slack MCP connector with enhanced functionality."""
+    from tests.fixtures.mcp_responses import (
+        get_slack_auth_test,
+        get_slack_messages_list
+    )
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "slack"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.fetch_messages.return_value = get_slack_messages_list()
+    mock.auth_test.return_value = get_slack_auth_test()
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_discord_connector() -> AsyncMock:
+    """Mock Discord MCP connector with enhanced functionality."""
+    from tests.fixtures.mcp_responses import (
+        get_discord_user_info,
+        get_discord_messages_list
+    )
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "discord"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.fetch_messages.return_value = get_discord_messages_list()
+    mock.get_user_info.return_value = get_discord_user_info()
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_outlook_connector() -> AsyncMock:
+    """Mock Outlook MCP connector."""
+    from tests.fixtures.mcp_responses import (
+        get_outlook_user_profile,
+        get_outlook_messages_list
+    )
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "outlook"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.fetch_messages.return_value = get_outlook_messages_list()
+    mock.get_user_profile.return_value = get_outlook_user_profile()
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_monday_connector() -> AsyncMock:
+    """Mock Monday.com MCP connector."""
+    from tests.fixtures.mcp_responses import (
+        get_monday_user_info,
+        get_monday_boards_list,
+        get_monday_create_item_response
+    )
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "monday"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.get_user_info.return_value = get_monday_user_info()
+    mock.fetch_boards.return_value = get_monday_boards_list()
+    mock.create_task.return_value = get_monday_create_item_response()
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_connector_registry(
+    mock_zoom_connector,
+    mock_slack_connector,
+    mock_discord_connector,
+    mock_outlook_connector,
+    mock_monday_connector
+) -> dict:
+    """Enhanced MCP connector registry with all connectors."""
+    return {
+        "zoom": mock_zoom_connector,
+        "slack": mock_slack_connector,
+        "discord": mock_discord_connector,
+        "outlook": mock_outlook_connector,
+        "monday": mock_monday_connector
+    }
+
+
+# ============================================================================
+# INTEGRATION SERVICE FIXTURES (Sprint 2)
+# ============================================================================
+
+@pytest.fixture
+def mock_integration_service(supabase_client_mock) -> Mock:
+    """Mock integration service for testing."""
+    from app.services.integration_service import IntegrationService
+
+    mock = Mock(spec=IntegrationService)
+    mock.db = supabase_client_mock
+    mock.create_integration = AsyncMock()
+    mock.get_integration = AsyncMock()
+    mock.list_integrations = AsyncMock(return_value=[])
+    mock.update_integration = AsyncMock()
+    mock.delete_integration = AsyncMock(return_value=True)
+    mock.check_integration_health = AsyncMock()
+    mock.get_integration_status = AsyncMock()
+
+    return mock
+
+
+@pytest.fixture
+def sample_integration(mock_workspace_id: str) -> dict:
+    """Sample integration data for testing."""
+    from tests.fixtures.integration_fixtures import IntegrationFactory
+    return IntegrationFactory.connected(workspace_id=mock_workspace_id)
+
+
+@pytest.fixture
+def sample_oauth_token(sample_integration: dict) -> dict:
+    """Sample OAuth token for testing."""
+    from tests.fixtures.integration_fixtures import OAuthTokenFactory
+    return OAuthTokenFactory(integration_id=sample_integration["id"])
+
+
+@pytest.fixture
+def sample_health_check(sample_integration: dict) -> dict:
+    """Sample health check for testing."""
+    from tests.fixtures.integration_fixtures import HealthCheckFactory
+    return HealthCheckFactory.healthy(
+        integration_id=sample_integration["id"],
+        platform=sample_integration["platform"]
+    )
+
+
+# ============================================================================
 # TEST MARKERS
 # ============================================================================
 
@@ -410,3 +686,6 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "mcp: Tests involving MCP integrations")
     config.addinivalue_line("markers", "rls: Row-level security tests")
     config.addinivalue_line("markers", "vector: Vector/embedding tests")
+    config.addinivalue_line("markers", "oauth: OAuth flow tests (Sprint 2)")
+    config.addinivalue_line("markers", "health: Health monitoring tests (Sprint 2)")
+    config.addinivalue_line("markers", "connector: MCP connector tests (Sprint 2)")

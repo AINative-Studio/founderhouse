@@ -52,10 +52,29 @@ async def lifespan(app: FastAPI):
         if settings.environment == "production":
             raise
 
+    # Initialize background tasks
+    if settings.enable_health_checks:
+        try:
+            from app.tasks.integration_health import init_scheduler
+            init_scheduler()
+            logger.info("Background task scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize background tasks: {str(e)}")
+
     yield
 
     # Shutdown
     logger.info("Shutting down AI Chief of Staff API")
+
+    # Stop background tasks
+    if settings.enable_health_checks:
+        try:
+            from app.tasks.integration_health import stop_health_checks
+            stop_health_checks()
+            logger.info("Background task scheduler stopped")
+        except Exception as e:
+            logger.error(f"Error stopping background tasks: {str(e)}")
+
     db_manager.close()
 
 

@@ -54,9 +54,21 @@ class Settings(BaseSettings):
     zoom_client_secret: Optional[str] = None
     slack_client_id: Optional[str] = None
     slack_client_secret: Optional[str] = None
+    discord_client_id: Optional[str] = None
+    discord_client_secret: Optional[str] = None
     discord_bot_token: Optional[str] = None
     monday_api_key: Optional[str] = None
     notion_api_key: Optional[str] = None
+    google_client_id: Optional[str] = None  # For Gmail
+    google_client_secret: Optional[str] = None
+    microsoft_client_id: Optional[str] = None  # For Outlook
+    microsoft_client_secret: Optional[str] = None
+    loom_client_id: Optional[str] = None
+    loom_client_secret: Optional[str] = None
+
+    # Background Tasks
+    enable_health_checks: bool = Field(default=True, description="Enable scheduled health checks")
+    health_check_interval_hours: int = Field(default=6, description="Health check interval in hours")
 
     # Vector Search Configuration
     embedding_dimension: int = Field(default=1536, description="Dimension of embedding vectors")
