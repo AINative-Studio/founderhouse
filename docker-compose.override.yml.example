@@ -1,0 +1,27 @@
+# This file can be copied to docker-compose.override.yml for local customization
+# docker-compose.override.yml is gitignored by default
+
+version: '3.9'
+
+services:
+  api:
+    # Override environment variables
+    environment:
+      - LOG_LEVEL=DEBUG
+      - API_ENV=development
+
+    # Mount additional volumes if needed
+    # volumes:
+    #   - ./local-data:/data
+
+  postgres:
+    # Use different port if 5432 is already in use
+    # ports:
+    #   - "5433:5432"
+    pass
+
+  redis:
+    # Use different port if 6379 is already in use
+    # ports:
+    #   - "6380:6379"
+    pass

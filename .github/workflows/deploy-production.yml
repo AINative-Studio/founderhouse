@@ -1,0 +1,161 @@
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm production deployment'
+        required: true
+        default: ''
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  validate-deployment:
+    name: Validate Production Deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate confirmation
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "Deployment cancelled: confirmation not provided"
+            exit 1
+          fi
+
+      - name: Check branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ] && [ "${{ github.event_name }}" != "release" ]; then
+            echo "Production deployments must be from main branch or release tags"
+            exit 1
+          fi
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: validate-deployment
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.deployment_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          echo "$HOME/.railway/bin" >> $GITHUB_PATH
+
+      - name: Create deployment backup point
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }}
+          railway environment production
+          # Log current deployment for rollback reference
+          railway status --json > deployment-backup.json
+          cat deployment-backup.json
+
+      - name: Deploy to Railway Production
+        id: deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway link ${{ secrets.RAILWAY_PROJECT_ID }}
+          railway environment production
+          railway up --detach
+
+          # Capture deployment URL
+          DEPLOYMENT_URL=$(railway status --json | jq -r '.deployments[0].url')
+          echo "deployment_url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+
+      - name: Run database migrations
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway run python backend/scripts/migrate.py
+
+      - name: Wait for deployment stabilization
+        run: sleep 45
+
+      - name: Health check
+        id: health
+        run: |
+          MAX_RETRIES=15
+          RETRY_COUNT=0
+          HEALTH_URL="${{ steps.deploy.outputs.deployment_url }}/health"
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if curl -f -s "$HEALTH_URL" > /dev/null; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Health check failed, retrying... ($((RETRY_COUNT + 1))/$MAX_RETRIES)"
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            sleep 10
+          done
+
+          echo "Health check failed after $MAX_RETRIES attempts"
+          exit 1
+
+      - name: Run comprehensive smoke tests
+        env:
+          API_BASE_URL: ${{ steps.deploy.outputs.deployment_url }}
+          API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
+        run: |
+          # Basic endpoints
+          curl -f "$API_BASE_URL/health" || exit 1
+          curl -f "$API_BASE_URL/version" || exit 1
+
+          # TODO: Add more comprehensive smoke tests
+          # - Test authentication
+          # - Test critical API endpoints
+          # - Test database connectivity
+
+          echo "Production smoke tests passed"
+
+      - name: Monitor initial metrics
+        run: |
+          echo "Monitoring deployment for 2 minutes..."
+          sleep 120
+          # TODO: Add metrics collection
+          # - Response time
+          # - Error rate
+          # - Database connection pool
+
+      - name: Archive deployment artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-deployment-${{ github.sha }}
+          path: deployment-backup.json
+          retention-days: 30
+
+      - name: Create deployment record
+        run: |
+          echo "Deployment completed at $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          echo "Commit: ${{ github.sha }}"
+          echo "URL: ${{ steps.deploy.outputs.deployment_url }}"
+          echo "Triggered by: ${{ github.actor }}"
+
+  notify-deployment:
+    name: Notify Deployment Status
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: always()
+
+    steps:
+      - name: Send notification
+        run: |
+          if [ "${{ needs.deploy-production.result }}" == "success" ]; then
+            echo "Production deployment succeeded"
+            # TODO: Send success notification (Slack, Discord, Email)
+          else
+            echo "Production deployment failed - immediate attention required"
+            # TODO: Send failure alert
+            exit 1
+          fi

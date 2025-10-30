@@ -1,0 +1,82 @@
+[run]
+# Coverage.py configuration for AI Chief of Staff
+source = backend/app
+omit =
+    */tests/*
+    */test_*.py
+    */__pycache__/*
+    */venv/*
+    */virtualenv/*
+    */.venv/*
+    */migrations/*
+    */alembic/*
+    */conftest.py
+    */__init__.py
+    */config.py
+    */settings.py
+
+branch = True
+parallel = True
+
+[report]
+# Reporting Configuration
+precision = 2
+show_missing = True
+skip_covered = False
+skip_empty = True
+
+# Fail if coverage below threshold
+fail_under = 90
+
+# Exclude patterns
+exclude_lines =
+    # Standard pragmas
+    pragma: no cover
+
+    # Debug code
+    def __repr__
+    def __str__
+
+    # Defensive programming
+    raise AssertionError
+    raise NotImplementedError
+
+    # Type checking
+    if TYPE_CHECKING:
+    if typing.TYPE_CHECKING:
+    @overload
+
+    # Abstract methods
+    @abstractmethod
+    @abc.abstractmethod
+
+    # Non-runnable code
+    if __name__ == .__main__.:
+    if 0:
+    if False:
+
+    # Pass statements
+    pass
+
+    # Ellipsis
+    \.\.\.
+
+    # Exception handling
+    except ImportError:
+    except ModuleNotFoundError:
+
+    # Logger statements (optional)
+    logger\.debug
+    logger\.info
+
+[html]
+directory = htmlcov
+title = AI Chief of Staff - Test Coverage Report
+
+[xml]
+output = coverage.xml
+
+[paths]
+source =
+    backend/app
+    */site-packages/app
