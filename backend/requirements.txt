@@ -57,3 +57,22 @@ mypy==1.8.0
 # Documentation
 mkdocs==1.5.3
 mkdocs-material==9.5.9
+
+# LangChain and LLM providers
+langchain==0.1.6
+langchain-core==0.1.23
+langchain-openai==0.0.5
+langchain-anthropic==0.0.1
+
+# OpenAI
+openai==1.12.0
+
+# Anthropic
+anthropic==0.18.1
+
+# Token counting
+tiktoken==0.5.2
+
+# Text splitting and processing
+beautifulsoup4==4.12.3
+lxml==5.1.0

@@ -673,6 +673,108 @@ def sample_health_check(sample_integration: dict) -> dict:
 
 
 # ============================================================================
+# MEETING FIXTURES (Sprint 3)
+# ============================================================================
+
+@pytest.fixture
+def sample_meeting(mock_workspace_id: str, mock_founder_id: str) -> dict:
+    """Sample meeting for testing."""
+    from tests.fixtures.meeting_fixtures import MeetingFactory
+    return MeetingFactory(
+        workspace_id=mock_workspace_id,
+        founder_id=mock_founder_id
+    )
+
+
+@pytest.fixture
+def sample_transcript(sample_meeting: dict) -> dict:
+    """Sample transcript for testing."""
+    from tests.fixtures.meeting_fixtures import TranscriptFactory
+    return TranscriptFactory(
+        workspace_id=sample_meeting["workspace_id"],
+        founder_id=sample_meeting["founder_id"],
+        meeting_id=sample_meeting["id"]
+    )
+
+
+@pytest.fixture
+def sample_action_items() -> list:
+    """Sample action items for testing."""
+    from tests.fixtures.meeting_fixtures import ActionItemFactory
+    return [ActionItemFactory() for _ in range(3)]
+
+
+@pytest.fixture
+def sample_decisions() -> list:
+    """Sample decisions for testing."""
+    from tests.fixtures.meeting_fixtures import DecisionFactory
+    return [DecisionFactory() for _ in range(2)]
+
+
+@pytest.fixture
+def mock_llm_service() -> Mock:
+    """Mock LLM service for testing summarization."""
+    from tests.fixtures.mock_llm_responses import (
+        MOCK_SUMMARY_SHORT_MEETING,
+        MOCK_ACTION_ITEMS_SHORT_MEETING,
+        MOCK_DECISIONS_MEDIUM_MEETING,
+        MOCK_SENTIMENT_SHORT_MEETING
+    )
+
+    mock = Mock()
+    mock.generate_summary.return_value = MOCK_SUMMARY_SHORT_MEETING
+    mock.extract_action_items.return_value = MOCK_ACTION_ITEMS_SHORT_MEETING
+    mock.extract_decisions.return_value = MOCK_DECISIONS_MEDIUM_MEETING
+    mock.analyze_sentiment.return_value = MOCK_SENTIMENT_SHORT_MEETING
+    return mock
+
+
+@pytest.fixture
+def mock_langchain_chain() -> AsyncMock:
+    """Mock LangChain chain for testing."""
+    mock = AsyncMock()
+    mock.ainvoke.return_value = {"output": "Mocked chain output"}
+    mock.astream.return_value = iter([
+        {"chunk": "Mocked"},
+        {"chunk": " streaming"},
+        {"chunk": " output"}
+    ])
+    return mock
+
+
+@pytest.fixture
+def mock_task_service() -> AsyncMock:
+    """Mock task service for testing task routing."""
+    mock = AsyncMock()
+    mock.create_task.return_value = {
+        "id": str(uuid4()),
+        "status": "created",
+        "platform": "monday"
+    }
+    mock.update_task.return_value = {"status": "updated"}
+    mock.link_to_meeting.return_value = True
+    return mock
+
+
+# ============================================================================
+# OTTER CONNECTOR FIXTURE (Sprint 3)
+# ============================================================================
+
+@pytest.fixture
+def mock_otter_connector() -> AsyncMock:
+    """Mock Otter connector for testing."""
+    from tests.fixtures.mcp_responses import get_otter_transcript_response
+
+    mock = AsyncMock()
+    mock.connect.return_value = {"status": "connected", "platform": "otter"}
+    mock.disconnect.return_value = {"status": "disconnected"}
+    mock.fetch_transcript.return_value = get_otter_transcript_response() if callable(get_otter_transcript_response) else {}
+    mock.health_check.return_value = {"status": "healthy", "is_healthy": True}
+    mock.test_connection.return_value = True
+    return mock
+
+
+# ============================================================================
 # TEST MARKERS
 # ============================================================================
 
@@ -689,3 +791,10 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "oauth: OAuth flow tests (Sprint 2)")
     config.addinivalue_line("markers", "health: Health monitoring tests (Sprint 2)")
     config.addinivalue_line("markers", "connector: MCP connector tests (Sprint 2)")
+    config.addinivalue_line("markers", "meeting: Meeting intelligence tests (Sprint 3)")
+    config.addinivalue_line("markers", "llm: LLM/AI processing tests (Sprint 3)")
+    config.addinivalue_line("markers", "webhook: Webhook handling tests (Sprint 3)")
+    config.addinivalue_line("markers", "accuracy: Accuracy validation tests (Sprint 3)")
+    config.addinivalue_line("markers", "summarization: Meeting summarization tests (Sprint 3)")
+    config.addinivalue_line("markers", "task_routing: Task routing tests (Sprint 3)")
+    config.addinivalue_line("markers", "performance: Performance benchmark tests (Sprint 3)")
