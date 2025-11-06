@@ -1,0 +1,32 @@
+Weekly Investor Update - {period}
+
+Dear Investors,
+
+{executive_summary}
+
+=== KEY METRICS ===
+{key_metrics}
+
+=== GROWTH HIGHLIGHTS ===
+{growth_highlights}
+
+=== CURRENT CHALLENGES ===
+{challenges}
+
+=== FINANCIAL OVERVIEW ===
+{financial_overview}
+
+=== PRODUCT UPDATES ===
+{product_updates}
+
+=== TEAM UPDATES ===
+{team_updates}
+
+=== ASKS ===
+{asks}
+
+=== NEXT MILESTONES ===
+{next_milestones}
+
+Best regards,
+{founder_name}

@@ -76,3 +76,9 @@ tiktoken==0.5.2
 # Text splitting and processing
 beautifulsoup4==4.12.3
 lxml==5.1.0
+
+# Statistical analysis and data processing
+numpy==1.26.4
+scipy==1.12.0
+pandas==2.2.0
+statsmodels==0.14.1

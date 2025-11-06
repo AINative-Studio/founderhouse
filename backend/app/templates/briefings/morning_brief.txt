@@ -1,0 +1,23 @@
+Good morning, {founder_name}!
+
+Here's your morning brief for {date}:
+
+=== TODAY'S SCHEDULE ===
+{schedule}
+
+=== OVERNIGHT UPDATES ===
+{overnight_updates}
+
+=== KEY METRICS ===
+{kpi_snapshot}
+
+=== URGENT ITEMS ===
+{urgent_items}
+
+=== TOP RECOMMENDATIONS ===
+{recommendations}
+
+=== UNREAD MESSAGES ===
+{unread_summary}
+
+Have a productive day!

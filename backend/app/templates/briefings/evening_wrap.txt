@@ -1,0 +1,28 @@
+Evening Wrap - {date}
+
+Hi {founder_name},
+
+Here's your day in review:
+
+=== DAY SUMMARY ===
+{summary}
+
+=== MEETINGS TODAY ===
+{meetings_today}
+
+=== COMPLETED TASKS ===
+{tasks_completed}
+
+=== PENDING TASKS ===
+{tasks_pending}
+
+=== METRIC CHANGES ===
+{kpi_changes}
+
+=== NEW INSIGHTS ===
+{new_insights}
+
+=== TOMORROW'S PREVIEW ===
+{tomorrow_preview}
+
+{reflection}
