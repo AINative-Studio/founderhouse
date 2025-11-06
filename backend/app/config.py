@@ -24,13 +24,18 @@ class Settings(BaseSettings):
         description="CORS allowed origins"
     )
 
-    # Supabase Configuration
-    supabase_url: str = Field(..., description="Supabase project URL")
-    supabase_key: str = Field(..., description="Supabase anon/service key")
-    supabase_service_key: Optional[str] = Field(None, description="Supabase service role key for admin operations")
+    # ZeroDB Configuration
+    # PostgreSQL with 60+ database service endpoints
+    # Includes vector search, embeddings, events, full-text search, and more
+    zerodb_host: str = Field(default="localhost", description="ZeroDB host")
+    zerodb_port: int = Field(default=5432, description="ZeroDB port")
+    zerodb_database: str = Field(default="founderhouse", description="ZeroDB database name")
+    zerodb_user: str = Field(..., description="ZeroDB username")
+    zerodb_password: str = Field(..., description="ZeroDB password")
+    zerodb_api_url: Optional[str] = Field(None, description="ZeroDB API URL for service endpoints")
+    zerodb_api_key: Optional[str] = Field(None, description="ZeroDB API key")
 
     # Database Configuration
-    postgres_url: Optional[str] = Field(None, description="Direct Postgres connection URL (optional)")
     db_pool_size: int = Field(default=10, description="Database connection pool size")
     db_max_overflow: int = Field(default=20, description="Max overflow connections")
 

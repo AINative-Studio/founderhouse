@@ -775,6 +775,84 @@ def mock_otter_connector() -> AsyncMock:
 
 
 # ============================================================================
+# KPI AND INSIGHTS FIXTURES (Sprint 4)
+# ============================================================================
+
+@pytest.fixture
+def mock_kpi_metric():
+    """Generate mock KPI metric."""
+    from tests.fixtures.kpi_fixtures import KPIMetricFactory
+    return KPIMetricFactory()
+
+
+@pytest.fixture
+def mock_anomaly():
+    """Generate mock anomaly."""
+    from tests.fixtures.kpi_fixtures import AnomalyFactory
+    return AnomalyFactory()
+
+
+@pytest.fixture
+def mock_recommendation():
+    """Generate mock recommendation."""
+    from tests.fixtures.kpi_fixtures import RecommendationFactory
+    return RecommendationFactory()
+
+
+@pytest.fixture
+def mock_briefing():
+    """Generate mock briefing."""
+    from tests.fixtures.kpi_fixtures import BriefingFactory
+    return BriefingFactory()
+
+
+@pytest.fixture
+def mock_anomaly_detector():
+    """Mock anomaly detection service."""
+    mock = Mock()
+    mock.detect_anomalies = AsyncMock(return_value=[])
+    mock.calculate_zscore = Mock(return_value=0.0)
+    mock.calculate_iqr = Mock(return_value=(0.0, 0.0))
+    mock.analyze_trend = Mock(return_value={"trend": "stable"})
+    return mock
+
+
+@pytest.fixture
+def mock_recommendation_service():
+    """Mock recommendation service."""
+    mock = AsyncMock()
+    mock.generate_recommendations = AsyncMock(return_value=[])
+    mock.rank_recommendations = Mock(return_value=[])
+    mock.get_recommendation_quality = Mock(return_value=0.8)
+    return mock
+
+
+@pytest.fixture
+def mock_briefing_service():
+    """Mock briefing service."""
+    mock = AsyncMock()
+    mock.generate_morning_brief = AsyncMock(return_value={})
+    mock.generate_evening_wrap = AsyncMock(return_value={})
+    mock.generate_investor_summary = AsyncMock(return_value={})
+    mock.validate_factual_accuracy = Mock(return_value=0.95)
+    return mock
+
+
+@pytest.fixture
+def sample_kpi_time_series():
+    """Sample KPI time-series data."""
+    from tests.fixtures.mock_kpi_data import MRR_GROWING_30_DAYS
+    return MRR_GROWING_30_DAYS
+
+
+@pytest.fixture
+def sample_kpi_with_anomaly():
+    """Sample KPI data with anomaly."""
+    from tests.fixtures.mock_kpi_data import MRR_WITH_SPIKE
+    return MRR_WITH_SPIKE
+
+
+# ============================================================================
 # TEST MARKERS
 # ============================================================================
 
@@ -798,3 +876,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "summarization: Meeting summarization tests (Sprint 3)")
     config.addinivalue_line("markers", "task_routing: Task routing tests (Sprint 3)")
     config.addinivalue_line("markers", "performance: Performance benchmark tests (Sprint 3)")
+    config.addinivalue_line("markers", "insights: Insights-related tests (Sprint 4)")
+    config.addinivalue_line("markers", "kpi: KPI ingestion and sync tests (Sprint 4)")
+    config.addinivalue_line("markers", "anomaly: Anomaly detection tests (Sprint 4)")
+    config.addinivalue_line("markers", "briefing: Briefing generation tests (Sprint 4)")
+    config.addinivalue_line("markers", "recommendation: Strategic recommendation tests (Sprint 4)")

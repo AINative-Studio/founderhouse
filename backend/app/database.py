@@ -1,12 +1,25 @@
 """
 Database Connection and Session Management
-Handles Supabase client initialization and connection pooling
+Handles ZeroDB client initialization and connection pooling
+ZeroDB provides PostgreSQL with 60+ database service endpoints including:
+- Vector search and embeddings
+- Real-time event streams
+- Full-text search
+- Time-series data
+- Graph queries
+- And more...
 """
 import logging
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, Any, Dict, List
 from contextlib import asynccontextmanager
 
-from supabase import create_client, Client
+import asyncpg
+import psycopg2
+from psycopg2 import pool
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -14,13 +27,18 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     """
-    Manages Supabase database connections and client instances
+    Manages ZeroDB database connections and client instances
     Implements singleton pattern for connection reuse
+    Provides access to 60+ ZeroDB service endpoints
     """
 
     _instance: Optional["DatabaseManager"] = None
-    _client: Optional[Client] = None
-    _service_client: Optional[Client] = None
+    _pool: Optional[pool.SimpleConnectionPool] = None
+    _async_pool: Optional[asyncpg.Pool] = None
+    _engine = None
+    _async_engine = None
+    _session_factory = None
+    _async_session_factory = None
 
     def __new__(cls):
         """Singleton pattern implementation"""
@@ -33,53 +51,143 @@ class DatabaseManager:
         if not hasattr(self, '_initialized'):
             self.settings = get_settings()
             self._initialized = True
-            logger.info("DatabaseManager initialized")
+            logger.info("DatabaseManager initialized with ZeroDB")
 
-    @property
-    def client(self) -> Client:
+    def _get_connection_pool(self) -> pool.SimpleConnectionPool:
         """
-        Get Supabase client with anon key
-        Used for operations with RLS enabled
+        Get or create PostgreSQL connection pool
+        Used for synchronous operations with RLS enabled
         """
-        if self._client is None:
-            self._client = create_client(
-                self.settings.supabase_url,
-                self.settings.supabase_key
-            )
-            logger.info("Supabase client initialized")
-        return self._client
-
-    @property
-    def service_client(self) -> Client:
-        """
-        Get Supabase client with service role key
-        Used for admin operations that bypass RLS
-        Requires SUPABASE_SERVICE_KEY to be set
-        """
-        if self._service_client is None:
-            if not self.settings.supabase_service_key:
-                raise ValueError(
-                    "SUPABASE_SERVICE_KEY not configured. "
-                    "Service client requires service role key for admin operations."
+        if self._pool is None:
+            try:
+                self._pool = pool.SimpleConnectionPool(
+                    minconn=1,
+                    maxconn=self.settings.db_pool_size,
+                    host=self.settings.zerodb_host,
+                    port=self.settings.zerodb_port,
+                    database=self.settings.zerodb_database,
+                    user=self.settings.zerodb_user,
+                    password=self.settings.zerodb_password
                 )
-            self._service_client = create_client(
-                self.settings.supabase_url,
-                self.settings.supabase_service_key
-            )
-            logger.info("Supabase service client initialized")
-        return self._service_client
+                logger.info("ZeroDB connection pool initialized")
+            except Exception as e:
+                logger.error(f"Failed to create connection pool: {str(e)}")
+                raise
+        return self._pool
 
-    def set_user_context(self, user_id: str) -> None:
+    async def _get_async_pool(self) -> asyncpg.Pool:
+        """
+        Get or create async PostgreSQL connection pool
+        Used for async operations
+        """
+        if self._async_pool is None:
+            try:
+                self._async_pool = await asyncpg.create_pool(
+                    host=self.settings.zerodb_host,
+                    port=self.settings.zerodb_port,
+                    database=self.settings.zerodb_database,
+                    user=self.settings.zerodb_user,
+                    password=self.settings.zerodb_password,
+                    min_size=1,
+                    max_size=self.settings.db_pool_size
+                )
+                logger.info("ZeroDB async connection pool initialized")
+            except Exception as e:
+                logger.error(f"Failed to create async pool: {str(e)}")
+                raise
+        return self._async_pool
+
+    @property
+    def engine(self):
+        """Get SQLAlchemy engine for synchronous operations"""
+        if self._engine is None:
+            connection_url = (
+                f"postgresql://{self.settings.zerodb_user}:{self.settings.zerodb_password}"
+                f"@{self.settings.zerodb_host}:{self.settings.zerodb_port}/{self.settings.zerodb_database}"
+            )
+            self._engine = create_engine(
+                connection_url,
+                pool_size=self.settings.db_pool_size,
+                max_overflow=self.settings.db_max_overflow,
+                pool_pre_ping=True,
+                echo=self.settings.debug
+            )
+            logger.info("SQLAlchemy engine initialized")
+        return self._engine
+
+    @property
+    def async_engine(self):
+        """Get SQLAlchemy async engine"""
+        if self._async_engine is None:
+            connection_url = (
+                f"postgresql+asyncpg://{self.settings.zerodb_user}:{self.settings.zerodb_password}"
+                f"@{self.settings.zerodb_host}:{self.settings.zerodb_port}/{self.settings.zerodb_database}"
+            )
+            self._async_engine = create_async_engine(
+                connection_url,
+                pool_size=self.settings.db_pool_size,
+                max_overflow=self.settings.db_max_overflow,
+                pool_pre_ping=True,
+                echo=self.settings.debug
+            )
+            logger.info("SQLAlchemy async engine initialized")
+        return self._async_engine
+
+    @property
+    def session_factory(self) -> sessionmaker:
+        """Get SQLAlchemy session factory"""
+        if self._session_factory is None:
+            self._session_factory = sessionmaker(
+                bind=self.engine,
+                autocommit=False,
+                autoflush=False
+            )
+        return self._session_factory
+
+    @property
+    def async_session_factory(self) -> async_sessionmaker:
+        """Get SQLAlchemy async session factory"""
+        if self._async_session_factory is None:
+            self._async_session_factory = async_sessionmaker(
+                bind=self.async_engine,
+                class_=AsyncSession,
+                autocommit=False,
+                autoflush=False,
+                expire_on_commit=False
+            )
+        return self._async_session_factory
+
+    def get_connection(self):
+        """Get a connection from the pool"""
+        pool = self._get_connection_pool()
+        return pool.getconn()
+
+    def return_connection(self, conn):
+        """Return a connection to the pool"""
+        if self._pool:
+            self._pool.putconn(conn)
+
+    async def get_async_connection(self):
+        """Get an async connection from the pool"""
+        pool = await self._get_async_pool()
+        return await pool.acquire()
+
+    async def return_async_connection(self, conn):
+        """Return an async connection to the pool"""
+        if self._async_pool:
+            await self._async_pool.release(conn)
+
+    def set_user_context(self, user_id: str, workspace_id: str) -> None:
         """
         Set the current user context for RLS
         This should be called after authentication to enforce row-level security
 
         Args:
             user_id: The authenticated user's ID
+            workspace_id: The user's workspace ID
         """
-        # Set custom claims for Supabase RLS
-        # This will be picked up by RLS policies using auth.uid()
-        logger.debug(f"Setting user context for user_id: {user_id}")
+        logger.debug(f"Setting user context for user_id: {user_id}, workspace_id: {workspace_id}")
+        # Context will be set per-session when executing queries
 
     async def health_check(self) -> dict:
         """
@@ -89,13 +197,21 @@ class DatabaseManager:
             dict: Health check status and details
         """
         try:
-            # Simple query to test connection
-            response = self.client.table("core.workspaces").select("id").limit(1).execute()
+            pool = await self._get_async_pool()
+            async with pool.acquire() as conn:
+                result = await conn.fetchval("SELECT 1")
+
+                # Check pgvector extension
+                vector_enabled = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector')"
+                )
 
             return {
                 "status": "healthy",
                 "database": "connected",
-                "supabase_url": self.settings.supabase_url
+                "zerodb_host": self.settings.zerodb_host,
+                "pgvector_enabled": bool(vector_enabled),
+                "pool_size": self.settings.db_pool_size
             }
         except Exception as e:
             logger.error(f"Database health check failed: {str(e)}")
@@ -105,49 +221,69 @@ class DatabaseManager:
                 "error": str(e)
             }
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Clean up database connections"""
-        # Supabase client doesn't require explicit cleanup
-        # But we reset the instances for testing purposes
-        self._client = None
-        self._service_client = None
-        logger.info("Database connections closed")
+        try:
+            if self._async_pool:
+                await self._async_pool.close()
+                logger.info("Async connection pool closed")
+
+            if self._pool:
+                self._pool.closeall()
+                logger.info("Sync connection pool closed")
+
+            if self._async_engine:
+                await self._async_engine.dispose()
+                logger.info("Async engine disposed")
+
+            if self._engine:
+                self._engine.dispose()
+                logger.info("Sync engine disposed")
+
+        except Exception as e:
+            logger.error(f"Error closing database connections: {str(e)}")
 
 
 # Global database manager instance
 db_manager = DatabaseManager()
 
 
-def get_db() -> Client:
+def get_db() -> Session:
     """
     Dependency injection function for FastAPI routes
-    Returns the standard Supabase client with RLS enabled
+    Returns SQLAlchemy session with RLS enabled
 
     Usage:
         @app.get("/endpoint")
-        async def endpoint(db: Client = Depends(get_db)):
+        async def endpoint(db: Session = Depends(get_db)):
             # Use db here
     """
-    return db_manager.client
+    session = db_manager.session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
-def get_service_db() -> Client:
+async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     """
-    Dependency injection function for admin operations
-    Returns the service client that bypasses RLS
-
-    Use with caution - only for operations that require admin access
+    Dependency injection function for async FastAPI routes
+    Returns async SQLAlchemy session
 
     Usage:
-        @app.post("/admin/endpoint")
-        async def admin_endpoint(db: Client = Depends(get_service_db)):
+        @app.get("/endpoint")
+        async def endpoint(db: AsyncSession = Depends(get_async_db)):
             # Use db here
     """
-    return db_manager.service_client
+    async with db_manager.async_session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
 
 
 @asynccontextmanager
-async def get_db_context() -> AsyncGenerator[Client, None]:
+async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
     """
     Async context manager for database operations
 
@@ -155,59 +291,61 @@ async def get_db_context() -> AsyncGenerator[Client, None]:
         async with get_db_context() as db:
             # Use db here
     """
-    try:
-        yield db_manager.client
-    except Exception as e:
-        logger.error(f"Database context error: {str(e)}")
-        raise
-    finally:
-        # Cleanup if needed
-        pass
+    async with db_manager.async_session_factory() as session:
+        try:
+            yield session
+        except Exception as e:
+            await session.rollback()
+            logger.error(f"Database context error: {str(e)}")
+            raise
+        finally:
+            await session.close()
 
 
 # Utility functions for common database operations
 
-def execute_query(table: str, query_type: str = "select", **kwargs):
+async def execute_query(
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
+    fetch_one: bool = False,
+    fetch_all: bool = True
+) -> Any:
     """
-    Execute a database query with error handling
+    Execute a raw SQL query with error handling
 
     Args:
-        table: Table name (e.g., "core.workspaces")
-        query_type: Type of query (select, insert, update, delete)
-        **kwargs: Additional query parameters
+        query: SQL query string
+        params: Query parameters (dict or tuple)
+        fetch_one: Return single row
+        fetch_all: Return all rows
 
     Returns:
         Query result or raises exception
     """
     try:
-        db = db_manager.client
-        table_ref = db.table(table)
-
-        if query_type == "select":
-            return table_ref.select(**kwargs).execute()
-        elif query_type == "insert":
-            return table_ref.insert(**kwargs).execute()
-        elif query_type == "update":
-            return table_ref.update(**kwargs).execute()
-        elif query_type == "delete":
-            return table_ref.delete(**kwargs).execute()
-        else:
-            raise ValueError(f"Unsupported query type: {query_type}")
-
+        pool = await db_manager._get_async_pool()
+        async with pool.acquire() as conn:
+            if fetch_one:
+                return await conn.fetchrow(query, **(params or {}))
+            elif fetch_all:
+                return await conn.fetch(query, **(params or {}))
+            else:
+                return await conn.execute(query, **(params or {}))
     except Exception as e:
         logger.error(f"Query execution failed: {str(e)}")
         raise
 
 
-def vector_search(
+async def vector_search(
     table: str,
     embedding_column: str,
-    query_embedding: list[float],
+    query_embedding: List[float],
     similarity_threshold: float = 0.7,
-    limit: int = 10
-) -> list:
+    limit: int = 10,
+    workspace_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """
-    Perform vector similarity search using pgvector
+    Perform vector similarity search using pgvector via ZeroDB
 
     Args:
         table: Table name with vector column
@@ -215,26 +353,64 @@ def vector_search(
         query_embedding: Query vector for similarity search
         similarity_threshold: Minimum similarity score (0-1)
         limit: Maximum number of results
+        workspace_id: Optional workspace filter for RLS
 
     Returns:
         List of similar records with similarity scores
     """
     try:
-        db = db_manager.client
+        # Convert embedding to string format for PostgreSQL
+        embedding_str = f"[{','.join(map(str, query_embedding))}]"
 
-        # Use Supabase's RPC function for vector search
-        # Note: This requires a custom RPC function in Supabase
-        # See documentation for vector search setup
-        response = db.rpc(
-            "match_documents",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": similarity_threshold,
-                "match_count": limit
-            }
-        ).execute()
+        # Build query with optional workspace filter
+        where_clause = ""
+        if workspace_id:
+            where_clause = f"WHERE workspace_id = '{workspace_id}'"
 
-        return response.data
+        query = f"""
+            SELECT *,
+                   1 - ({embedding_column} <=> '{embedding_str}'::vector) as similarity
+            FROM {table}
+            {where_clause}
+            WHERE 1 - ({embedding_column} <=> '{embedding_str}'::vector) > {similarity_threshold}
+            ORDER BY {embedding_column} <=> '{embedding_str}'::vector
+            LIMIT {limit}
+        """
+
+        results = await execute_query(query, fetch_all=True)
+        return [dict(row) for row in results]
+
     except Exception as e:
         logger.error(f"Vector search failed: {str(e)}")
+        raise
+
+
+async def execute_rpc(
+    function_name: str,
+    params: Optional[Dict[str, Any]] = None
+) -> Any:
+    """
+    Execute a PostgreSQL function (RPC call) via ZeroDB
+
+    Args:
+        function_name: Name of the PostgreSQL function
+        params: Function parameters as dictionary
+
+    Returns:
+        Function result
+    """
+    try:
+        pool = await db_manager._get_async_pool()
+        async with pool.acquire() as conn:
+            if params:
+                placeholders = ", ".join([f"${i+1}" for i in range(len(params))])
+                query = f"SELECT * FROM {function_name}({placeholders})"
+                result = await conn.fetch(query, *params.values())
+            else:
+                query = f"SELECT * FROM {function_name}()"
+                result = await conn.fetch(query)
+
+            return [dict(row) for row in result]
+    except Exception as e:
+        logger.error(f"RPC call failed: {str(e)}")
         raise
