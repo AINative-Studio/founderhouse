@@ -6,7 +6,7 @@ from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from supabase import Client
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import get_current_user, AuthUser, require_role
@@ -22,7 +22,7 @@ from app.services.workspace_service import WorkspaceService
 router = APIRouter()
 
 
-def get_workspace_service(db: Client = Depends(get_db)) -> WorkspaceService:
+def get_workspace_service(db: Session = Depends(get_db)) -> WorkspaceService:
     """Dependency to get workspace service instance"""
     return WorkspaceService(db)
 

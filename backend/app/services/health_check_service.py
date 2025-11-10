@@ -8,7 +8,8 @@ from uuid import UUID
 from datetime import datetime
 import json
 
-from supabase import Client
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 from fastapi import HTTPException, status
 
 from app.models.integration import (
@@ -26,12 +27,12 @@ logger = logging.getLogger(__name__)
 class HealthCheckService:
     """Service for checking integration health"""
 
-    def __init__(self, db: Client):
+    def __init__(self, db: Session):
         """
         Initialize health check service
 
         Args:
-            db: Supabase database client
+            db: SQLAlchemy database session
         """
         self.db = db
         self.oauth_service = OAuthService(db)
@@ -56,17 +57,17 @@ class HealthCheckService:
         """
         try:
             # Get integration from database
-            response = self.db.table("core.integrations").select("*").eq(
-                "id", str(integration_id)
-            ).execute()
+            query = text('SELECT * FROM "core"."integrations" WHERE id = :id')
+            result = self.db.execute(query, {"id": str(integration_id)})
+            integration_row = result.fetchone()
 
-            if not response.data:
+            if not integration_row:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Integration {integration_id} not found"
                 )
 
-            integration = response.data[0]
+            integration = dict(integration_row._mapping)
             platform = Platform(integration["platform"])
             current_status = IntegrationStatus(integration["status"])
 
@@ -134,23 +135,28 @@ class HealthCheckService:
                     current_status = IntegrationStatus.ERROR
 
                 # Update integration status in database
-                update_data = {
-                    "status": current_status.value,
-                    "updated_at": datetime.utcnow().isoformat()
-                }
-
                 # Update metadata with health check results
                 existing_metadata = integration.get("metadata", {})
+                if existing_metadata is None:
+                    existing_metadata = {}
                 existing_metadata.update({
                     "last_health_check": datetime.utcnow().isoformat(),
                     "is_healthy": is_healthy,
                     **metadata
                 })
-                update_data["metadata"] = existing_metadata
 
-                self.db.table("core.integrations").update(update_data).eq(
-                    "id", str(integration_id)
-                ).execute()
+                update_query = text('''
+                    UPDATE "core"."integrations"
+                    SET status = :status, updated_at = :updated_at, metadata = :metadata::jsonb
+                    WHERE id = :id
+                ''')
+                self.db.execute(update_query, {
+                    "status": current_status.value,
+                    "updated_at": datetime.utcnow().isoformat(),
+                    "metadata": json.dumps(existing_metadata),
+                    "id": str(integration_id)
+                })
+                self.db.commit()
 
             else:
                 # Just report current status without testing
@@ -205,14 +211,14 @@ class HealthCheckService:
         """
         try:
             # Get all integrations for workspace
-            response = self.db.table("core.integrations").select("id").eq(
-                "workspace_id", str(workspace_id)
-            ).execute()
+            query = text('SELECT id FROM "core"."integrations" WHERE workspace_id = :workspace_id')
+            result = self.db.execute(query, {"workspace_id": str(workspace_id)})
+            integrations = result.fetchall()
 
             health_checks = []
-            for integration in response.data:
+            for integration in integrations:
                 health_check = await self.check_integration_health(
-                    integration_id=UUID(integration["id"]),
+                    integration_id=UUID(integration.id),
                     test_connection=True
                 )
                 health_checks.append(health_check)
@@ -324,19 +330,23 @@ class HealthCheckService:
             error_message: Optional error message
         """
         try:
-            event_data = {
+            query = text('''
+                INSERT INTO "ops"."events"
+                (event_type, integration_id, platform, details, created_at)
+                VALUES (:event_type, :integration_id, :platform, :details::jsonb, :created_at)
+            ''')
+            self.db.execute(query, {
                 "event_type": "integration_health_check",
                 "integration_id": str(integration_id),
                 "platform": platform.value,
-                "details": {
+                "details": json.dumps({
                     "is_healthy": is_healthy,
                     "error_message": error_message,
                     "checked_at": datetime.utcnow().isoformat()
-                },
+                }),
                 "created_at": datetime.utcnow().isoformat()
-            }
-
-            self.db.table("ops.events").insert(event_data).execute()
+            })
+            self.db.commit()
 
         except Exception as e:
             # Don't fail health check if event logging fails
@@ -358,15 +368,21 @@ class HealthCheckService:
             List of historical health check events
         """
         try:
-            response = self.db.table("ops.events").select("*").eq(
-                "event_type", "integration_health_check"
-            ).eq(
-                "integration_id", str(integration_id)
-            ).order(
-                "created_at", desc=True
-            ).limit(limit).execute()
+            query = text('''
+                SELECT * FROM "ops"."events"
+                WHERE event_type = :event_type
+                AND integration_id = :integration_id
+                ORDER BY created_at DESC
+                LIMIT :limit
+            ''')
+            result = self.db.execute(query, {
+                "event_type": "integration_health_check",
+                "integration_id": str(integration_id),
+                "limit": limit
+            })
+            events = result.fetchall()
 
-            return response.data
+            return [dict(e._mapping) for e in events]
 
         except Exception as e:
             logger.error(f"Error fetching health history: {str(e)}")

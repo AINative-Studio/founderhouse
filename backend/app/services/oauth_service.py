@@ -11,7 +11,8 @@ from uuid import UUID
 
 import httpx
 from fastapi import HTTPException, status
-from supabase import Client
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.core.oauth_config import (
     OAuthProvider,
@@ -27,12 +28,12 @@ logger = logging.getLogger(__name__)
 class OAuthService:
     """Service for OAuth2 authentication and token management"""
 
-    def __init__(self, db: Client):
+    def __init__(self, db: Session):
         """
         Initialize OAuth service
 
         Args:
-            db: Supabase database client
+            db: SQLAlchemy database session
         """
         self.db = db
         # Store OAuth states in memory (in production, use Redis or database)
@@ -482,17 +483,17 @@ class OAuthService:
         """
         try:
             # Get integration from database
-            response = self.db.table("core.integrations").select("*").eq(
-                "id", str(integration_id)
-            ).execute()
+            query = text('SELECT * FROM "core"."integrations" WHERE id = :id')
+            result = self.db.execute(query, {"id": str(integration_id)})
+            integration_row = result.fetchone()
 
-            if not response.data:
+            if not integration_row:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Integration {integration_id} not found"
                 )
 
-            integration = response.data[0]
+            integration = dict(integration_row._mapping)
 
             # Check if integration has OAuth credentials
             metadata = integration.get("metadata", {})
@@ -543,12 +544,20 @@ class OAuthService:
             )
 
             # Update integration with new tokens
+            import json
             updated_metadata = {**metadata, **new_tokens}
-            self.db.table("core.integrations").update({
-                "metadata": updated_metadata,
+            update_query = text('''
+                UPDATE "core"."integrations"
+                SET metadata = :metadata::jsonb, status = :status, updated_at = :updated_at
+                WHERE id = :id
+            ''')
+            self.db.execute(update_query, {
+                "metadata": json.dumps(updated_metadata),
                 "status": IntegrationStatus.CONNECTED.value,
-                "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", str(integration_id)).execute()
+                "updated_at": datetime.utcnow().isoformat(),
+                "id": str(integration_id)
+            })
+            self.db.commit()
 
             logger.info(f"Successfully refreshed token for integration {integration_id}")
             return True

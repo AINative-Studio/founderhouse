@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from supabase import Client
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import get_current_user, AuthUser
@@ -31,12 +31,12 @@ router = APIRouter()
 settings = get_settings()
 
 
-def get_oauth_service(db: Client = Depends(get_db)) -> OAuthService:
+def get_oauth_service(db: Session = Depends(get_db)) -> OAuthService:
     """Dependency to get OAuth service instance"""
     return OAuthService(db)
 
 
-def get_integration_service(db: Client = Depends(get_db)) -> IntegrationService:
+def get_integration_service(db: Session = Depends(get_db)) -> IntegrationService:
     """Dependency to get integration service instance"""
     return IntegrationService(db)
 
@@ -202,7 +202,7 @@ async def oauth_callback(
     error_description: Optional[str] = Query(None, description="Error description"),
     oauth_service: OAuthService = Depends(get_oauth_service),
     integration_service: IntegrationService = Depends(get_integration_service),
-    db: Client = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
     Handle OAuth callback from platform
@@ -397,7 +397,7 @@ async def revoke_oauth_token(
     current_user: AuthUser = Depends(get_current_user),
     oauth_service: OAuthService = Depends(get_oauth_service),
     integration_service: IntegrationService = Depends(get_integration_service),
-    db: Client = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
     Revoke OAuth tokens for an integration

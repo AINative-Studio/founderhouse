@@ -7,7 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status, Query
-from supabase import Client
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import get_current_user, AuthUser
@@ -48,7 +48,7 @@ async def get_workspace_id(
 
 async def get_founder_id(
     founder_id: UUID,
-    db: Client = Depends(get_db),
+    db: Session = Depends(get_db),
     current_user: AuthUser = Depends(get_current_user)
 ) -> UUID:
     """
@@ -67,18 +67,21 @@ async def get_founder_id(
     """
     try:
         # Query founder from database
-        response = db.table("core.founders").select("*").eq("id", str(founder_id)).execute()
+        from sqlalchemy import text
+        result = db.execute(
+            text('SELECT * FROM "core"."founders" WHERE id = :founder_id'),
+            {"founder_id": str(founder_id)}
+        )
+        founder = result.fetchone()
 
-        if not response.data:
+        if not founder:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Founder {founder_id} not found"
             )
 
-        founder = response.data[0]
-
         # Verify user has access to this founder's workspace
-        if current_user.workspace_id and str(current_user.workspace_id) != founder["workspace_id"]:
+        if current_user.workspace_id and str(current_user.workspace_id) != founder.workspace_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this founder"
@@ -178,23 +181,23 @@ def verify_workspace_member(required_role: Optional[str] = None):
     async def verify_membership(
         workspace_id: UUID = Depends(get_workspace_id),
         current_user: AuthUser = Depends(get_current_user),
-        db: Client = Depends(get_db)
+        db: Session = Depends(get_db)
     ) -> bool:
         """Verify user is a member of the workspace with required role"""
         try:
             # Query workspace membership
-            response = db.table("core.members").select("*").match({
-                "workspace_id": str(workspace_id),
-                "user_id": str(current_user.user_id)
-            }).execute()
+            from sqlalchemy import text
+            result = db.execute(
+                text('SELECT * FROM "core"."members" WHERE workspace_id = :workspace_id AND user_id = :user_id'),
+                {"workspace_id": str(workspace_id), "user_id": str(current_user.user_id)}
+            )
+            member = result.fetchone()
 
-            if not response.data:
+            if not member:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied to this workspace"
                 )
-
-            member = response.data[0]
 
             # Check role if required
             if required_role:
@@ -205,7 +208,7 @@ def verify_workspace_member(required_role: Optional[str] = None):
                     "viewer": 1
                 }
 
-                member_level = role_hierarchy.get(member["role"], 0)
+                member_level = role_hierarchy.get(member.role, 0)
                 required_level = role_hierarchy.get(required_role, 0)
 
                 if member_level < required_level:

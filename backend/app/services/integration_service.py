@@ -8,7 +8,8 @@ from uuid import UUID
 from datetime import datetime
 import json
 
-from supabase import Client
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 from fastapi import HTTPException, status
 from cryptography.fernet import Fernet
 
@@ -29,12 +30,12 @@ logger = logging.getLogger(__name__)
 class IntegrationService:
     """Service for integration management"""
 
-    def __init__(self, db: Client):
+    def __init__(self, db: Session):
         """
         Initialize integration service
 
         Args:
-            db: Supabase database client
+            db: SQLAlchemy database session
         """
         self.db = db
         self.settings = get_settings()
@@ -105,13 +106,20 @@ class IntegrationService:
         """
         try:
             # Check for duplicate integration
-            existing = self.db.table("core.integrations").select("id").match({
+            query = text('''
+                SELECT id FROM "core"."integrations"
+                WHERE workspace_id = :workspace_id
+                AND platform = :platform
+                AND (founder_id = :founder_id OR (founder_id IS NULL AND :founder_id IS NULL))
+            ''')
+            result = self.db.execute(query, {
                 "workspace_id": str(integration.workspace_id),
                 "platform": integration.platform.value,
                 "founder_id": str(integration.founder_id) if integration.founder_id else None
-            }).execute()
+            })
+            existing = result.fetchone()
 
-            if existing.data:
+            if existing:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Integration for {integration.platform} already exists"
@@ -121,27 +129,34 @@ class IntegrationService:
             encrypted_creds = self._encrypt_credentials(integration.credentials)
 
             # Create integration
-            integration_data = {
+            query = text('''
+                INSERT INTO "core"."integrations"
+                (workspace_id, founder_id, platform, connection_type, status, credentials_enc, metadata, connected_at, updated_at)
+                VALUES (:workspace_id, :founder_id, :platform, :connection_type, :status, :credentials_enc, :metadata::jsonb, :connected_at, :updated_at)
+                RETURNING *
+            ''')
+            result = self.db.execute(query, {
                 "workspace_id": str(integration.workspace_id),
                 "founder_id": str(integration.founder_id) if integration.founder_id else None,
                 "platform": integration.platform.value,
                 "connection_type": integration.connection_type.value,
                 "status": IntegrationStatus.PENDING.value,
-                "credentials_enc": encrypted_creds.hex(),  # Store as hex string
-                "metadata": integration.metadata,
+                "credentials_enc": encrypted_creds.hex(),
+                "metadata": json.dumps(integration.metadata) if integration.metadata else None,
                 "connected_at": None,
                 "updated_at": datetime.utcnow().isoformat()
-            }
+            })
+            self.db.commit()
+            created = result.fetchone()
 
-            response = self.db.table("core.integrations").insert(integration_data).execute()
-
-            if not response.data:
+            if not created:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to create integration"
                 )
 
-            created = response.data[0]
+            # Convert to dict
+            created = dict(created._mapping)
 
             # Attempt to connect to the integration
             try:
@@ -152,10 +167,17 @@ class IntegrationService:
                 )
 
                 # Update status to connected
-                self.db.table("core.integrations").update({
+                update_query = text('''
+                    UPDATE "core"."integrations"
+                    SET status = :status, connected_at = :connected_at
+                    WHERE id = :id
+                ''')
+                self.db.execute(update_query, {
                     "status": IntegrationStatus.CONNECTED.value,
-                    "connected_at": datetime.utcnow().isoformat()
-                }).eq("id", created["id"]).execute()
+                    "connected_at": datetime.utcnow().isoformat(),
+                    "id": created["id"]
+                })
+                self.db.commit()
 
                 created["status"] = IntegrationStatus.CONNECTED.value
                 created["connected_at"] = datetime.utcnow().isoformat()
@@ -163,9 +185,16 @@ class IntegrationService:
             except Exception as e:
                 logger.warning(f"Connection test failed for integration {created['id']}: {str(e)}")
                 # Keep status as PENDING or set to ERROR
-                self.db.table("core.integrations").update({
-                    "status": IntegrationStatus.ERROR.value
-                }).eq("id", created["id"]).execute()
+                update_query = text('''
+                    UPDATE "core"."integrations"
+                    SET status = :status
+                    WHERE id = :id
+                ''')
+                self.db.execute(update_query, {
+                    "status": IntegrationStatus.ERROR.value,
+                    "id": created["id"]
+                })
+                self.db.commit()
                 created["status"] = IntegrationStatus.ERROR.value
 
             logger.info(f"Created integration {created['id']} for platform {integration.platform}")
@@ -234,21 +263,21 @@ class IntegrationService:
             HTTPException: If integration not found
         """
         try:
-            response = self.db.table("core.integrations").select("*").eq(
-                "id", str(integration_id)
-            ).execute()
+            query = text('SELECT * FROM "core"."integrations" WHERE id = :id')
+            result = self.db.execute(query, {"id": str(integration_id)})
+            integration = result.fetchone()
 
-            if not response.data:
+            if not integration:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Integration {integration_id} not found"
                 )
 
-            integration = response.data[0]
-            # Remove encrypted credentials from response
-            integration.pop("credentials_enc", None)
+            # Convert to dict and remove encrypted credentials from response
+            integration_dict = dict(integration._mapping)
+            integration_dict.pop("credentials_enc", None)
 
-            return IntegrationResponse(**integration)
+            return IntegrationResponse(**integration_dict)
 
         except HTTPException:
             raise
@@ -277,23 +306,32 @@ class IntegrationService:
             List of integrations
         """
         try:
-            query = self.db.table("core.integrations").select("*").eq(
-                "workspace_id", str(workspace_id)
-            )
+            # Build query dynamically based on filters
+            conditions = ["workspace_id = :workspace_id"]
+            params = {"workspace_id": str(workspace_id)}
 
             if founder_id:
-                query = query.eq("founder_id", str(founder_id))
+                conditions.append("founder_id = :founder_id")
+                params["founder_id"] = str(founder_id)
 
             if platform:
-                query = query.eq("platform", platform.value)
+                conditions.append("platform = :platform")
+                params["platform"] = platform.value
 
-            response = query.execute()
+            where_clause = " AND ".join(conditions)
+            query = text(f'SELECT * FROM "core"."integrations" WHERE {where_clause}')
+
+            result = self.db.execute(query, params)
+            integrations = result.fetchall()
 
             # Remove encrypted credentials from responses
-            for integration in response.data:
-                integration.pop("credentials_enc", None)
+            integration_list = []
+            for integration in integrations:
+                integration_dict = dict(integration._mapping)
+                integration_dict.pop("credentials_enc", None)
+                integration_list.append(IntegrationResponse(**integration_dict))
 
-            return [IntegrationResponse(**i) for i in response.data]
+            return integration_list
 
         except Exception as e:
             logger.error(f"Error listing integrations: {str(e)}")
@@ -337,11 +375,26 @@ class IntegrationService:
 
             update_data["updated_at"] = datetime.utcnow().isoformat()
 
-            response = self.db.table("core.integrations").update(update_data).eq(
-                "id", str(integration_id)
-            ).execute()
+            # Build UPDATE query dynamically
+            set_clauses = []
+            params = {"id": str(integration_id)}
 
-            if not response.data:
+            for key, value in update_data.items():
+                if key == "metadata":
+                    set_clauses.append(f"{key} = :{key}::jsonb")
+                    params[key] = json.dumps(value) if value else None
+                else:
+                    set_clauses.append(f"{key} = :{key}")
+                    params[key] = value
+
+            set_clause = ", ".join(set_clauses)
+            query = text(f'UPDATE "core"."integrations" SET {set_clause} WHERE id = :id RETURNING *')
+
+            result = self.db.execute(query, params)
+            self.db.commit()
+            updated = result.fetchone()
+
+            if not updated:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Integration {integration_id} not found"
@@ -349,9 +402,9 @@ class IntegrationService:
 
             logger.info(f"Updated integration {integration_id}")
 
-            updated = response.data[0]
-            updated.pop("credentials_enc", None)
-            return IntegrationResponse(**updated)
+            updated_dict = dict(updated._mapping)
+            updated_dict.pop("credentials_enc", None)
+            return IntegrationResponse(**updated_dict)
 
         except HTTPException:
             raise
@@ -376,11 +429,12 @@ class IntegrationService:
             HTTPException: If deletion fails
         """
         try:
-            response = self.db.table("core.integrations").delete().eq(
-                "id", str(integration_id)
-            ).execute()
+            query = text('DELETE FROM "core"."integrations" WHERE id = :id RETURNING *')
+            result = self.db.execute(query, {"id": str(integration_id)})
+            self.db.commit()
+            deleted = result.fetchone()
 
-            if not response.data:
+            if not deleted:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Integration {integration_id} not found"

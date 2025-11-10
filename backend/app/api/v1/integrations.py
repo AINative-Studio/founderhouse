@@ -6,7 +6,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
-from supabase import Client
+from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.core.security import get_current_user, AuthUser
@@ -25,7 +25,7 @@ from app.services.integration_service import IntegrationService
 router = APIRouter()
 
 
-def get_integration_service(db: Client = Depends(get_db)) -> IntegrationService:
+def get_integration_service(db: Session = Depends(get_db)) -> IntegrationService:
     """Dependency to get integration service instance"""
     return IntegrationService(db)
 
