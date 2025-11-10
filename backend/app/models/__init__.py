@@ -65,6 +65,47 @@ from app.models.briefing import (
     BriefingGenerateRequest,
     BriefingSchedule
 )
+from app.models.voice_command import (
+    VoiceCommandRequest,
+    VoiceCommandResponse,
+    VoiceCommandStatus,
+    VoiceCommandIntent,
+    VoiceTranscriptionRequest,
+    VoiceTranscriptionResponse
+)
+from app.models.loom_video import (
+    LoomVideoIngestRequest,
+    LoomVideoResponse,
+    LoomVideoStatus,
+    LoomVideoType,
+    LoomSummarizeRequest,
+    LoomVideoSummary
+)
+from app.models.discord_message import (
+    DiscordStatusUpdateRequest,
+    DiscordBriefingRequest,
+    DiscordMessageResponse,
+    DiscordMessageType,
+    DiscordEmbed
+)
+from app.models.agent_routing import (
+    AgentRouteRequest,
+    AgentTaskResponse,
+    AgentCollaborationRequest,
+    AgentCollaborationResponse,
+    AgentType,
+    AgentTaskStatus,
+    AgentTaskPriority,
+    AgentHealthStatus
+)
+from app.models.feedback import (
+    FeedbackSubmitRequest,
+    FeedbackResponse,
+    FeedbackType,
+    FeedbackCategory,
+    FeedbackStatus,
+    FeedbackAnalytics
+)
 
 __all__ = [
     # Workspace models
@@ -124,4 +165,40 @@ __all__ = [
     "InvestorSummaryContent",
     "BriefingGenerateRequest",
     "BriefingSchedule",
+    # Voice Command models
+    "VoiceCommandRequest",
+    "VoiceCommandResponse",
+    "VoiceCommandStatus",
+    "VoiceCommandIntent",
+    "VoiceTranscriptionRequest",
+    "VoiceTranscriptionResponse",
+    # Loom Video models
+    "LoomVideoIngestRequest",
+    "LoomVideoResponse",
+    "LoomVideoStatus",
+    "LoomVideoType",
+    "LoomSummarizeRequest",
+    "LoomVideoSummary",
+    # Discord models
+    "DiscordStatusUpdateRequest",
+    "DiscordBriefingRequest",
+    "DiscordMessageResponse",
+    "DiscordMessageType",
+    "DiscordEmbed",
+    # Agent Routing models
+    "AgentRouteRequest",
+    "AgentTaskResponse",
+    "AgentCollaborationRequest",
+    "AgentCollaborationResponse",
+    "AgentType",
+    "AgentTaskStatus",
+    "AgentTaskPriority",
+    "AgentHealthStatus",
+    # Feedback models
+    "FeedbackSubmitRequest",
+    "FeedbackResponse",
+    "FeedbackType",
+    "FeedbackCategory",
+    "FeedbackStatus",
+    "FeedbackAnalytics",
 ]

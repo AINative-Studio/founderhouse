@@ -27,13 +27,12 @@ class Settings(BaseSettings):
     # ZeroDB Configuration
     # PostgreSQL with 60+ database service endpoints
     # Includes vector search, embeddings, events, full-text search, and more
-    zerodb_host: str = Field(default="localhost", description="ZeroDB host")
-    zerodb_port: int = Field(default=5432, description="ZeroDB port")
-    zerodb_database: str = Field(default="founderhouse", description="ZeroDB database name")
-    zerodb_user: str = Field(..., description="ZeroDB username")
+    zerodb_email: str = Field(default="admin@ainative.studio", description="ZeroDB user email")
+    zerodb_username: str = Field(default="admin@ainative.studio", description="ZeroDB username")
     zerodb_password: str = Field(..., description="ZeroDB password")
-    zerodb_api_url: Optional[str] = Field(None, description="ZeroDB API URL for service endpoints")
-    zerodb_api_key: Optional[str] = Field(None, description="ZeroDB API key")
+    zerodb_api_base_url: str = Field(default="https://api.ainative.studio", description="ZeroDB API base URL")
+    zerodb_api_key: str = Field(..., description="ZeroDB API key")
+    zerodb_project_id: str = Field(..., description="ZeroDB project ID")
 
     # Database Configuration
     db_pool_size: int = Field(default=10, description="Database connection pool size")
