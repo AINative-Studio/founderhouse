@@ -270,8 +270,7 @@ async def test_generate_recommendations_basic(recommendation_chain, sample_conte
                     "estimated_cost": None
                 }
             ]
-        }
-
+        }):
         result = await recommendation_chain.generate_recommendations(sample_context)
 
         assert len(result) == 1
