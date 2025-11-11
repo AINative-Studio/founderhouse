@@ -1,21 +1,25 @@
 """
 Discord Scheduler
 Background task for sending daily briefings to Discord at scheduled times
+Supports timezone-aware 8 AM local time delivery
 """
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 import asyncio
-from typing import List
+from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from app.services.discord_service import DiscordService
 from app.services.briefing_service import BriefingService
 from app.models.discord_message import DiscordBriefingRequest
 from app.models.briefing import BriefingType
 from app.database import get_db_context
+from app.config import get_settings
 from sqlalchemy import text
 
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class DiscordScheduler:
@@ -26,8 +30,9 @@ class DiscordScheduler:
         self.discord_service = DiscordService()
         self.briefing_service = BriefingService()
         self.running = False
-        self.morning_briefing_time = time(8, 0)  # 8 AM
+        self.morning_briefing_time = time(settings.discord_briefing_hour, 0)  # Configurable, default 8 AM
         self.evening_briefing_time = time(18, 0)  # 6 PM
+        self.default_timezone = settings.default_timezone
 
     async def start(self):
         """Start the scheduler"""
@@ -49,17 +54,117 @@ class DiscordScheduler:
         self.logger.info("Discord scheduler stopped")
 
     async def _check_and_send_briefings(self):
-        """Check if it's time to send briefings and send them"""
-        now = datetime.utcnow()
-        current_time = now.time()
+        """
+        Check if it's time to send briefings and send them
+        Timezone-aware: checks each workspace's local time
+        """
+        now = datetime.now(timezone.utc)
 
-        # Check if it's morning briefing time (within 5 minute window)
-        if self._is_time_to_send(current_time, self.morning_briefing_time):
-            await self._send_all_morning_briefings()
+        # Get all active schedules and check each workspace's timezone
+        morning_schedules = await self._get_active_schedules(BriefingType.MORNING)
+        evening_schedules = await self._get_active_schedules(BriefingType.EVENING)
 
-        # Check if it's evening briefing time
-        elif self._is_time_to_send(current_time, self.evening_briefing_time):
-            await self._send_all_evening_briefings()
+        # Check morning briefing time for each timezone
+        for schedule in morning_schedules:
+            if await self._is_time_to_send_for_schedule(now, schedule, self.morning_briefing_time):
+                await self._send_briefing_for_schedule(schedule, BriefingType.MORNING)
+
+        # Check evening briefing time for each timezone
+        for schedule in evening_schedules:
+            if await self._is_time_to_send_for_schedule(now, schedule, self.evening_briefing_time):
+                await self._send_briefing_for_schedule(schedule, BriefingType.EVENING)
+
+    async def _is_time_to_send_for_schedule(
+        self,
+        current_utc: datetime,
+        schedule: dict,
+        target_time: time,
+        window_minutes: int = 5
+    ) -> bool:
+        """
+        Check if it's time to send briefing for a specific schedule's timezone
+
+        Args:
+            current_utc: Current time in UTC
+            schedule: Schedule configuration with timezone
+            target_time: Target local time to send
+            window_minutes: Window in minutes
+
+        Returns:
+            True if within sending window
+        """
+        try:
+            # Get workspace timezone, default to UTC
+            tz_name = schedule.get("timezone", self.default_timezone)
+            workspace_tz = ZoneInfo(tz_name)
+
+            # Convert current UTC time to workspace's local time
+            local_time = current_utc.astimezone(workspace_tz)
+
+            # Check if within target time window
+            return self._is_time_to_send(local_time.time(), target_time, window_minutes)
+
+        except Exception as e:
+            self.logger.error(f"Error checking time for schedule: {str(e)}")
+            # Fallback to UTC if timezone invalid
+            return self._is_time_to_send(current_utc.time(), target_time, window_minutes)
+
+    async def _send_briefing_for_schedule(
+        self,
+        schedule: dict,
+        briefing_type: BriefingType
+    ):
+        """
+        Send briefing for a specific schedule
+
+        Args:
+            schedule: Schedule configuration
+            briefing_type: Type of briefing to send
+        """
+        try:
+            workspace_id = schedule["workspace_id"]
+            founder_id = schedule["founder_id"]
+
+            # Check if already sent today
+            if await self._already_sent_today(workspace_id, founder_id, briefing_type):
+                return
+
+            # Generate briefing
+            async with get_db_context() as db:
+                briefing = await self.briefing_service.generate_briefing(
+                    workspace_id=workspace_id,
+                    founder_id=founder_id,
+                    briefing_type=briefing_type,
+                    db=db
+                )
+
+                if not briefing:
+                    self.logger.warning(
+                        f"Failed to generate {briefing_type.value} briefing for workspace {workspace_id}"
+                    )
+                    return
+
+                # Send to Discord
+                request = DiscordBriefingRequest(
+                    workspace_id=workspace_id,
+                    founder_id=founder_id,
+                    briefing_id=briefing.id,
+                    channel_name=schedule.get("discord_channel", "daily-briefings"),
+                    include_metrics=True,
+                    include_action_items=True,
+                    mention_team=schedule.get("mention_team", briefing_type == BriefingType.MORNING)
+                )
+
+                await self.discord_service.send_briefing(request, db=db)
+
+                self.logger.info(
+                    f"Sent {briefing_type.value} briefing to Discord for workspace {workspace_id}"
+                )
+
+        except Exception as e:
+            self.logger.error(
+                f"Error sending briefing for schedule: {str(e)}"
+            )
 
     def _is_time_to_send(self, current_time: time, target_time: time, window_minutes: int = 5) -> bool:
         """
@@ -192,10 +297,10 @@ class DiscordScheduler:
 
     async def _get_active_schedules(self, briefing_type: BriefingType) -> List[dict]:
         """
-        Get active briefing schedules for a given type
+        Get active briefing schedules for a given type with timezone support
 
         Returns:
-            List of schedule dictionaries
+            List of schedule dictionaries with timezone information
         """
         try:
             async with get_db_context() as db:
@@ -205,7 +310,9 @@ class DiscordScheduler:
                             workspace_id,
                             founder_id,
                             discord_channel,
-                            mention_team
+                            mention_team,
+                            timezone,
+                            delivery_hour
                         FROM briefing_schedules
                         WHERE briefing_type = :briefing_type
                         AND is_active = true
@@ -219,8 +326,10 @@ class DiscordScheduler:
                     schedules.append({
                         "workspace_id": row[0],
                         "founder_id": row[1],
-                        "discord_channel": row[2],
-                        "mention_team": row[3] if len(row) > 3 else False
+                        "discord_channel": row[2] if len(row) > 2 else "daily-briefings",
+                        "mention_team": row[3] if len(row) > 3 else False,
+                        "timezone": row[4] if len(row) > 4 else self.default_timezone,
+                        "delivery_hour": row[5] if len(row) > 5 else settings.discord_briefing_hour
                     })
 
                 return schedules

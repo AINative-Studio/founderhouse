@@ -2,13 +2,14 @@
 Agent Routing & Collaboration API Endpoints
 Endpoints for routing tasks to agents and managing cross-agent collaboration
 """
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body, Path
 
 from app.services.agent_routing_service import AgentRoutingService
 from app.services.agent_collaboration_service import AgentCollaborationService
+from app.services.agent_orchestration_service import AgentOrchestrationService
 from app.models.agent_routing import (
     AgentRouteRequest,
     AgentTaskResponse,
@@ -33,6 +34,11 @@ def get_routing_service() -> AgentRoutingService:
 def get_collaboration_service() -> AgentCollaborationService:
     """Dependency for agent collaboration service"""
     return AgentCollaborationService()
+
+
+def get_orchestration_service() -> AgentOrchestrationService:
+    """Dependency for agent orchestration service"""
+    return AgentOrchestrationService()
 
 
 @router.post("/route", response_model=AgentTaskResponse)
@@ -250,3 +256,75 @@ async def get_agent_metrics(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching agent metrics: {str(e)}")
+
+
+@router.post("/orchestrate")
+async def orchestrate_workflow(
+    workspace_id: UUID = Body(..., description="Workspace ID"),
+    founder_id: UUID = Body(..., description="Founder ID"),
+    objective: str = Body(..., description="High-level objective for the workflow"),
+    input_data: Dict[str, Any] = Body(..., description="Input data for the workflow"),
+    workflow_type: str = Body(default="cos_task_insight", description="Workflow type"),
+    timeout_seconds: int = Body(default=300, ge=10, le=3600, description="Maximum execution time"),
+    service: AgentOrchestrationService = Depends(get_orchestration_service)
+):
+    """
+    Orchestrate multi-agent workflow
+
+    Executes a coordinated workflow across multiple agents following a Directed Acyclic Graph (DAG).
+    Default workflow: CoS Agent → Task Manager → Insight Engine
+
+    Sprint 5 AgentFlow feature enabling:
+    - Multi-step agent collaboration
+    - Automatic routing between agents
+    - Result aggregation from all agents
+
+    Returns:
+        Workflow execution result with aggregated outputs from all agents
+    """
+    try:
+        result = await service.orchestrate_workflow(
+            workspace_id=workspace_id,
+            founder_id=founder_id,
+            objective=objective,
+            input_data=input_data,
+            workflow_type=workflow_type,
+            timeout_seconds=timeout_seconds
+        )
+
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to orchestrate workflow")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error orchestrating workflow: {str(e)}")
+
+
+@router.get("/workflows/{workflow_id}")
+async def get_workflow_execution(
+    workflow_id: UUID = Path(..., description="Workflow execution ID"),
+    service: AgentOrchestrationService = Depends(get_orchestration_service)
+):
+    """
+    Get workflow execution details
+
+    Returns complete information about a workflow execution including:
+    - Execution steps for each agent
+    - Aggregated results
+    - Status and timing information
+    """
+    try:
+        workflow = await service.get_workflow_execution(workflow_id)
+
+        if not workflow:
+            raise HTTPException(status_code=404, detail="Workflow execution not found")
+
+        return workflow
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching workflow execution: {str(e)}")

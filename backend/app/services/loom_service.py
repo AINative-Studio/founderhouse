@@ -1,13 +1,14 @@
 """
 Loom Video Service
 Service for ingesting and summarizing Loom videos
-Integrates with Loom MCP connector for video processing
+Integrates with Loom MCP connector for video processing with Otter.ai fallback
 """
 import logging
 import re
 from typing import Optional, List, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime
+import asyncio
 
 from app.models.loom_video import (
     LoomVideoIngestRequest,
@@ -19,18 +20,42 @@ from app.models.loom_video import (
     LoomVideoSummary,
     LoomSummarizeRequest
 )
+from app.mcp.loom_client import LoomMCPClient
+from app.connectors.otter_connector import OtterConnector
+from app.connectors.base_connector import ConnectorStatus
+from app.services.summarization_service import SummarizationService
 from app.database import get_db_context
+from app.config import get_settings
 from sqlalchemy import text
 
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 class LoomService:
-    """Service for Loom video ingestion and summarization"""
+    """
+    Service for Loom video ingestion and summarization
+
+    Features:
+    - Loom MCP integration for video metadata and transcripts
+    - Otter.ai fallback for transcription when Loom fails
+    - Async background processing
+    - Reuses meeting summarization logic
+    - 3-minute SLA for video processing
+    """
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.loom_credentials = {
+            "api_key": settings.loom_client_id,
+            "client_id": settings.loom_client_id,
+            "client_secret": settings.loom_client_secret
+        }
+        self.otter_credentials = {
+            "api_key": getattr(settings, "otter_api_key", None)
+        }
+        self.summarization_service = SummarizationService()
 
     async def ingest_video(
         self,
@@ -68,7 +93,7 @@ class LoomService:
 
                 if existing:
                     self.logger.info(f"Video {video_id} already exists")
-                    return await self._build_video_response(existing)
+                    return self._build_video_response(existing)
 
             # Create video record
             video_create = LoomVideoCreate(
@@ -104,7 +129,7 @@ class LoomService:
                 await db.commit()
                 row = result.fetchone()
 
-            video_response = await self._build_video_response(row)
+            video_response = self._build_video_response(row)
 
             # If auto-summarize is enabled, process video
             if request.auto_summarize:
@@ -184,7 +209,7 @@ class LoomService:
                 row = result.fetchone()
 
             self.logger.info(f"Summarized video {video_id}")
-            return await self._build_video_response(row)
+            return self._build_video_response(row)
 
         except Exception as e:
             self.logger.error(f"Error summarizing video: {str(e)}")
@@ -211,7 +236,7 @@ class LoomService:
                 if not row:
                     return None
 
-                return await self._build_video_response(row)
+                return self._build_video_response(row)
 
         except Exception as e:
             self.logger.error(f"Error getting video: {str(e)}")
@@ -251,7 +276,7 @@ class LoomService:
 
                 videos = []
                 for row in rows:
-                    videos.append(await self._build_video_response(row))
+                    videos.append(self._build_video_response(row))
 
                 return videos
 
@@ -260,27 +285,58 @@ class LoomService:
             return []
 
     async def _process_video(self, video_id: UUID):
-        """Background processing of video"""
+        """
+        Background processing of video with 3-minute SLA target
+
+        Steps:
+        1. Update status to downloading
+        2. Fetch video metadata via Loom MCP
+        3. Extract transcript (Loom MCP primary, Otter fallback)
+        4. Generate summary using meeting summarization logic
+        5. Update status to completed
+
+        Raises exception if processing fails
+        """
         try:
+            processing_start = datetime.utcnow()
+
+            # Get video from database
+            async with get_db_context() as db:
+                result = await db.execute(
+                    text("SELECT * FROM loom_videos WHERE id = :id"),
+                    {"id": str(video_id)}
+                )
+                video = result.fetchone()
+
+                if not video:
+                    raise ValueError(f"Video {video_id} not found")
+
+            loom_video_id = video.video_id
+
             # Update status to downloading
             await self._update_video_status(video_id, LoomVideoStatus.DOWNLOADING)
 
-            # In production, download video via Loom MCP
-            # For now, simulate processing
+            # Fetch video metadata via Loom MCP
+            video_metadata = await self._get_video_metadata(loom_video_id)
+
+            # Update status to transcribing
             await self._update_video_status(video_id, LoomVideoStatus.TRANSCRIBING)
 
-            # Get transcript from Loom
-            # transcript = await loom_mcp.get_transcript(video_id)
+            # Get transcript - try Loom first, fallback to Otter
+            transcript = await self._get_transcript(loom_video_id)
 
-            # For now, use mock transcript
-            transcript = self._mock_transcript()
+            if not transcript:
+                raise ValueError("Failed to obtain transcript from Loom or Otter")
 
-            await self._update_video(
-                video_id,
-                LoomVideoUpdate(transcript=transcript)
-            )
+            # Update video with transcript and metadata
+            update_data = LoomVideoUpdate(transcript=transcript)
+            if video_metadata:
+                update_data.thumbnail_url = video_metadata.get("thumbnail_url")
+                update_data.duration_seconds = video_metadata.get("duration_seconds")
 
-            # Generate summary
+            await self._update_video(video_id, update_data)
+
+            # Generate summary using meeting summarization logic
             await self.summarize_video(
                 video_id,
                 LoomSummarizeRequest(
@@ -289,8 +345,19 @@ class LoomService:
                 )
             )
 
+            processing_time = (datetime.utcnow() - processing_start).total_seconds()
+            self.logger.info(
+                f"Video {video_id} processed successfully in {processing_time:.2f}s"
+            )
+
+            # Log if SLA exceeded
+            if processing_time > 180:  # 3 minutes
+                self.logger.warning(
+                    f"Video {video_id} processing exceeded 3-minute SLA: {processing_time:.2f}s"
+                )
+
         except Exception as e:
-            self.logger.error(f"Error processing video: {str(e)}")
+            self.logger.error(f"Error processing video {video_id}: {str(e)}")
             await self._update_video(
                 video_id,
                 LoomVideoUpdate(
@@ -298,6 +365,119 @@ class LoomService:
                     error_message=str(e)
                 )
             )
+            raise
+
+    async def _get_video_metadata(self, video_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get video metadata from Loom MCP
+
+        Args:
+            video_id: Loom video ID
+
+        Returns:
+            Video metadata dict or None
+        """
+        try:
+            async with LoomMCPClient(self.loom_credentials) as client:
+                video_data = await client.get_video_details(video_id)
+
+                if not video_data:
+                    return None
+
+                return {
+                    "title": video_data.title,
+                    "description": video_data.description,
+                    "duration_seconds": video_data.duration_seconds,
+                    "thumbnail_url": video_data.thumbnail_url,
+                    "owner_name": video_data.owner_name,
+                    "owner_email": video_data.owner_email
+                }
+
+        except Exception as e:
+            self.logger.error(f"Error fetching video metadata: {str(e)}")
+            return None
+
+    async def _get_transcript(self, video_id: str) -> Optional[str]:
+        """
+        Get transcript with fallback strategy:
+        1. Try Loom MCP first
+        2. Fallback to Otter.ai if Loom fails
+
+        Args:
+            video_id: Loom video ID
+
+        Returns:
+            Transcript text or None
+        """
+        # Try Loom MCP first
+        transcript = await self._get_transcript_from_loom(video_id)
+
+        if transcript:
+            self.logger.info(f"Transcript obtained from Loom MCP for video {video_id}")
+            return transcript
+
+        # Fallback to Otter
+        self.logger.warning(f"Loom transcript unavailable, attempting Otter fallback for video {video_id}")
+        transcript = await self._get_transcript_from_otter(video_id)
+
+        if transcript:
+            self.logger.info(f"Transcript obtained from Otter fallback for video {video_id}")
+            return transcript
+
+        self.logger.error(f"Failed to obtain transcript from both Loom and Otter for video {video_id}")
+        return None
+
+    async def _get_transcript_from_loom(self, video_id: str) -> Optional[str]:
+        """
+        Get transcript from Loom MCP
+
+        Args:
+            video_id: Loom video ID
+
+        Returns:
+            Transcript text or None
+        """
+        try:
+            async with LoomMCPClient(self.loom_credentials) as client:
+                transcript_data = await client.get_video_transcript(video_id)
+
+                if transcript_data:
+                    return transcript_data.transcript_text
+
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching Loom transcript: {str(e)}")
+            return None
+
+    async def _get_transcript_from_otter(self, video_id: str) -> Optional[str]:
+        """
+        Get transcript from Otter.ai fallback
+
+        Args:
+            video_id: Video identifier
+
+        Returns:
+            Transcript text or None
+        """
+        try:
+            if not self.otter_credentials.get("api_key"):
+                self.logger.warning("Otter API key not configured, skipping fallback")
+                return None
+
+            async with OtterConnector(self.otter_credentials) as otter:
+                # Use video_id as speech_id for Otter
+                response = await otter.get_speech_transcript(video_id)
+
+                if response.status == ConnectorStatus.SUCCESS:
+                    transcript_data = response.data
+                    return transcript_data.get("transcript", {}).get("text")
+
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error fetching Otter transcript: {str(e)}")
+            return None
 
     def _extract_video_id(self, video_url: str) -> Optional[str]:
         """Extract Loom video ID from URL"""
@@ -338,39 +518,91 @@ class LoomService:
         max_length: int = 500
     ) -> LoomVideoSummary:
         """
-        Generate summary from transcript using AI
+        Generate summary from transcript using meeting summarization logic
 
-        In production, this would use LLM for summarization
+        Reuses existing SummarizationService to maintain consistency
+        across meetings and Loom videos.
+
+        Args:
+            transcript: Video transcript text
+            include_action_items: Extract action items
+            include_topics: Extract topics
+            max_length: Maximum summary length
+
+        Returns:
+            LoomVideoSummary
         """
-        # Simple extractive summary for now
-        lines = [line.strip() for line in transcript.strip().split('\n') if line.strip()]
+        try:
+            # Use meeting summarization service for consistency
+            # Create temporary IDs for the summarization
+            temp_meeting_id = uuid4()
+            temp_workspace_id = uuid4()
+            temp_founder_id = uuid4()
 
-        executive_summary = " ".join(lines[:2])[:max_length]
+            result = await self.summarization_service.summarize_meeting(
+                meeting_id=temp_meeting_id,
+                workspace_id=temp_workspace_id,
+                founder_id=temp_founder_id,
+                transcript=transcript,
+                extract_action_items=include_action_items,
+                extract_decisions=False,  # Not relevant for videos
+                analyze_sentiment=False   # Optional for videos
+            )
 
-        key_points = []
-        action_items = []
-        topics = []
+            # Convert meeting summary to Loom video summary format
+            summary_data = result.get("summary")
+            action_items_data = result.get("action_items", [])
 
-        for line in lines:
-            line_lower = line.lower()
-            if "action" in line_lower or "todo" in line_lower or "next step" in line_lower:
-                action_items.append(line)
-            elif len(key_points) < 5:
-                key_points.append(line)
+            # Extract action item descriptions
+            action_items = [item.description for item in action_items_data]
 
-        # Extract topics (simplified)
-        if include_topics:
-            topics = ["Product Demo", "Dashboard", "Metrics"]
+            # Truncate executive summary to max length
+            executive_summary = summary_data.executive_summary
+            if len(executive_summary) > max_length:
+                executive_summary = executive_summary[:max_length] + "..."
 
-        return LoomVideoSummary(
-            executive_summary=executive_summary,
-            key_points=key_points,
-            action_items=action_items if include_action_items else [],
-            topics=topics if include_topics else [],
-            participants=["Team"],
-            duration_minutes=5,
-            transcript_length=len(transcript)
-        )
+            return LoomVideoSummary(
+                executive_summary=executive_summary,
+                key_points=summary_data.key_points[:5],  # Limit to 5
+                action_items=action_items if include_action_items else [],
+                topics=summary_data.topics_discussed if include_topics else [],
+                participants=["Video Creator"],
+                duration_minutes=None,
+                transcript_length=len(transcript)
+            )
+
+        except Exception as e:
+            self.logger.error(f"Error generating summary with SummarizationService: {str(e)}")
+
+            # Fallback to simple extractive summary
+            lines = [line.strip() for line in transcript.strip().split('\n') if line.strip()]
+
+            executive_summary = " ".join(lines[:2])[:max_length]
+
+            key_points = []
+            action_items = []
+            topics = []
+
+            for line in lines:
+                line_lower = line.lower()
+                if "action" in line_lower or "todo" in line_lower or "next step" in line_lower:
+                    action_items.append(line)
+                elif len(key_points) < 5:
+                    key_points.append(line)
+
+            # Extract topics (simplified)
+            if include_topics:
+                topics = ["Video Content"]
+
+            return LoomVideoSummary(
+                executive_summary=executive_summary,
+                key_points=key_points,
+                action_items=action_items if include_action_items else [],
+                topics=topics if include_topics else [],
+                participants=["Video Creator"],
+                duration_minutes=None,
+                transcript_length=len(transcript)
+            )
 
     async def _update_video_status(self, video_id: UUID, status: LoomVideoStatus):
         """Update video status"""
@@ -413,7 +645,7 @@ class LoomService:
         except Exception as e:
             self.logger.error(f"Error updating video: {str(e)}")
 
-    async def _build_video_response(self, row) -> LoomVideoResponse:
+    def _build_video_response(self, row) -> LoomVideoResponse:
         """Build video response from database row"""
         summary = None
         if row.summary:

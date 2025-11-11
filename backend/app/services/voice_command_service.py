@@ -19,6 +19,7 @@ from app.models.voice_command import (
     VoiceTranscriptionResponse
 )
 from app.database import get_db_context
+from app.mcp.zerovoice_client import get_zerovoice
 from sqlalchemy import text
 
 
@@ -28,9 +29,25 @@ logger = logging.getLogger(__name__)
 class VoiceCommandService:
     """Service for processing voice commands"""
 
-    def __init__(self):
+    def __init__(self, zerovoice_client=None):
         self.logger = logging.getLogger(__name__)
-        # Intent patterns for command recognition
+        # Inject ZeroVoice MCP client (allow mock for testing)
+        self.zerovoice = zerovoice_client or get_zerovoice()
+
+        # Intent mapping from ZeroVoice format to internal enum
+        self.intent_mapping = {
+            "create_task": VoiceCommandIntent.CREATE_TASK,
+            "schedule_meeting": VoiceCommandIntent.SCHEDULE_MEETING,
+            "get_summary": VoiceCommandIntent.GET_SUMMARY,
+            "check_metrics": VoiceCommandIntent.CHECK_METRICS,
+            "send_message": VoiceCommandIntent.SEND_MESSAGE,
+            "create_note": VoiceCommandIntent.CREATE_NOTE,
+            "get_briefing": VoiceCommandIntent.GET_BRIEFING,
+            "update_status": VoiceCommandIntent.UPDATE_STATUS,
+            "unknown": VoiceCommandIntent.UNKNOWN
+        }
+
+        # Fallback intent patterns for local recognition (if MCP unavailable)
         self.intent_patterns = {
             VoiceCommandIntent.CREATE_TASK: ["create task", "add task", "new task", "remind me to"],
             VoiceCommandIntent.SCHEDULE_MEETING: ["schedule meeting", "book meeting", "set up meeting"],
@@ -58,20 +75,24 @@ class VoiceCommandService:
         try:
             start_time = time.time()
 
-            # In production, this would integrate with ZeroVoice MCP
-            # For now, simulate transcription
-            # TODO: Integrate with actual ZeroVoice MCP connector
+            # Use ZeroVoice MCP for transcription
+            result = await self.zerovoice.transcribe_audio(
+                audio_url=request.audio_url,
+                audio_base64=request.audio_base64,
+                language=request.language,
+                include_timestamps=request.include_timestamps
+            )
 
-            transcript = self._mock_transcription(request)
             duration_seconds = time.time() - start_time
 
             response = VoiceTranscriptionResponse(
                 workspace_id=request.workspace_id,
                 founder_id=request.founder_id,
-                transcript=transcript,
-                confidence=0.95,
+                transcript=result["transcript"],
+                confidence=result["confidence"],
                 language=request.language,
-                duration_seconds=duration_seconds
+                duration_seconds=duration_seconds,
+                word_timestamps=result.get("timestamps")
             )
 
             self.logger.info(f"Transcribed audio for founder {request.founder_id}")
@@ -87,6 +108,7 @@ class VoiceCommandService:
     ) -> Optional[VoiceCommandResponse]:
         """
         Process a voice command from transcript or audio
+        Complete voice → intent → action pipeline in < 2.5s (per PRD)
 
         Args:
             request: Voice command request
@@ -97,27 +119,22 @@ class VoiceCommandService:
         try:
             start_time = time.time()
 
-            # Get or create transcript
-            if request.transcript:
-                transcript = request.transcript
-            else:
-                # Transcribe audio first
-                transcription_req = VoiceTranscriptionRequest(
-                    workspace_id=request.workspace_id,
-                    founder_id=request.founder_id,
-                    audio_url=request.audio_url,
-                    audio_base64=request.audio_base64
-                )
-                transcription = await self.transcribe_audio(transcription_req)
-                if not transcription:
-                    raise ValueError("Failed to transcribe audio")
-                transcript = transcription.transcript
+            # Use ZeroVoice MCP for complete pipeline
+            mcp_result = await self.zerovoice.process_voice_command(
+                audio_url=request.audio_url,
+                audio_base64=request.audio_base64,
+                transcript=request.transcript,
+                context=request.context
+            )
 
-            # Recognize intent
-            intent, confidence = self._recognize_intent(transcript)
+            transcript = mcp_result["transcript"]
+            intent_str = mcp_result["intent"]
+            confidence = mcp_result["confidence"]
+            entities = mcp_result["entities"]
+            processing_time_ms = mcp_result["processing_time_ms"]
 
-            # Extract entities
-            entities = self._extract_entities(transcript, intent)
+            # Map intent from ZeroVoice format to internal enum
+            intent = self.intent_mapping.get(intent_str, VoiceCommandIntent.UNKNOWN)
 
             # Create command record
             command_create = VoiceCommandCreate(
@@ -154,12 +171,25 @@ class VoiceCommandService:
                 command_id = row[0]
                 created_at = row[1]
 
-            # Execute the command
+            # Execute the command (action routing)
             action_taken, result_data = await self._execute_command(
                 command_id, intent, entities, request.workspace_id, request.founder_id
             )
 
-            processing_time_ms = int((time.time() - start_time) * 1000)
+            # Total processing time (MCP + DB + action)
+            total_processing_time_ms = int((time.time() - start_time) * 1000)
+
+            # Log performance metrics
+            if total_processing_time_ms > 2500:
+                self.logger.warning(
+                    f"Voice command exceeded 2.5s target: {total_processing_time_ms}ms "
+                    f"(MCP: {processing_time_ms}ms)"
+                )
+            else:
+                self.logger.info(
+                    f"Voice command processed in {total_processing_time_ms}ms "
+                    f"(< 2.5s target, MCP: {processing_time_ms}ms)"
+                )
 
             # Update command status
             async with get_db_context() as db:
@@ -176,7 +206,7 @@ class VoiceCommandService:
                         "status": VoiceCommandStatus.COMPLETED.value,
                         "action_taken": action_taken,
                         "result": result_data,
-                        "processing_time_ms": processing_time_ms
+                        "processing_time_ms": total_processing_time_ms
                     }
                 )
                 await db.commit()
@@ -192,7 +222,7 @@ class VoiceCommandService:
                 extracted_entities=entities,
                 action_taken=action_taken,
                 result=result_data,
-                processing_time_ms=processing_time_ms,
+                processing_time_ms=total_processing_time_ms,
                 created_at=created_at
             )
 
@@ -221,78 +251,6 @@ class VoiceCommandService:
                 pass
             return None
 
-    def _mock_transcription(self, request: VoiceTranscriptionRequest) -> str:
-        """Mock transcription for testing"""
-        # In production, this would call ZeroVoice MCP
-        return "Create a task to follow up with investors by Friday"
-
-    def _recognize_intent(self, transcript: str) -> tuple[VoiceCommandIntent, float]:
-        """
-        Recognize intent from transcript
-
-        Args:
-            transcript: Voice command transcript
-
-        Returns:
-            Tuple of (intent, confidence_score)
-        """
-        transcript_lower = transcript.lower()
-
-        best_intent = VoiceCommandIntent.UNKNOWN
-        best_score = 0.0
-
-        for intent, patterns in self.intent_patterns.items():
-            for pattern in patterns:
-                if pattern in transcript_lower:
-                    # Simple scoring based on pattern match
-                    score = len(pattern) / len(transcript_lower)
-                    if score > best_score:
-                        best_score = score
-                        best_intent = intent
-
-        # If we found a match, set confidence based on score
-        confidence = min(0.95, 0.7 + best_score)
-
-        if best_intent == VoiceCommandIntent.UNKNOWN:
-            confidence = 0.3
-
-        return best_intent, confidence
-
-    def _extract_entities(self, transcript: str, intent: VoiceCommandIntent) -> Dict[str, Any]:
-        """
-        Extract entities from transcript based on intent
-
-        Args:
-            transcript: Voice command transcript
-            intent: Recognized intent
-
-        Returns:
-            Dictionary of extracted entities
-        """
-        entities = {}
-
-        # Simple entity extraction
-        # In production, this would use NLP/NER models
-
-        if intent == VoiceCommandIntent.CREATE_TASK:
-            # Extract task description
-            for prefix in ["create task", "add task", "new task", "remind me to"]:
-                if prefix in transcript.lower():
-                    entities["task"] = transcript.lower().split(prefix)[-1].strip()
-                    break
-
-        elif intent == VoiceCommandIntent.SCHEDULE_MEETING:
-            # Extract meeting details
-            entities["meeting_subject"] = "Meeting"  # Simplified
-
-        elif intent == VoiceCommandIntent.SEND_MESSAGE:
-            # Extract message content
-            for prefix in ["send message", "message", "tell"]:
-                if prefix in transcript.lower():
-                    entities["message"] = transcript.lower().split(prefix)[-1].strip()
-                    break
-
-        return entities
 
     async def _execute_command(
         self,

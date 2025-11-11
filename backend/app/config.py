@@ -75,10 +75,26 @@ class Settings(BaseSettings):
     microsoft_client_secret: Optional[str] = None
     loom_client_id: Optional[str] = None
     loom_client_secret: Optional[str] = None
+    otter_api_key: Optional[str] = None  # For transcription fallback
+
+    # ZeroVoice MCP (Sprint 5 - voice → intent → action pipeline)
+    zerovoice_api_base_url: str = Field(
+        default="https://api.zerovoice.ainative.studio",
+        description="ZeroVoice MCP API base URL for voice command processing"
+    )
+    zerovoice_api_key: Optional[str] = Field(
+        default=None,
+        description="ZeroVoice API key for authentication"
+    )
 
     # Background Tasks
     enable_health_checks: bool = Field(default=True, description="Enable scheduled health checks")
     health_check_interval_hours: int = Field(default=6, description="Health check interval in hours")
+
+    # Discord Daily Briefing Configuration
+    enable_discord_briefings: bool = Field(default=True, description="Enable automated Discord briefings")
+    discord_briefing_hour: int = Field(default=8, description="Hour to send Discord briefings (local time)")
+    default_timezone: str = Field(default="UTC", description="Default timezone for briefings")
 
     # Vector Search Configuration
     embedding_dimension: int = Field(default=1536, description="Dimension of embedding vectors")
