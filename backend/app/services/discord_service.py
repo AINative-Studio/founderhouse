@@ -7,6 +7,9 @@ import logging
 from typing import Optional, List, Dict, Any
 from uuid import UUID
 from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+import json
 
 from app.models.discord_message import (
     DiscordStatusUpdateRequest,
@@ -20,9 +23,7 @@ from app.models.discord_message import (
 )
 from app.models.briefing import BriefingResponse
 from app.services.briefing_service import BriefingService
-from app.database import get_db_context
 from app.config import get_settings
-from sqlalchemy import text
 
 
 logger = logging.getLogger(__name__)
@@ -38,17 +39,22 @@ class DiscordService:
 
     async def post_status_update(
         self,
-        request: DiscordStatusUpdateRequest
+        request: DiscordStatusUpdateRequest,
+        db: Optional[Session] = None
     ) -> Optional[DiscordMessageResponse]:
         """
         Post a status update to Discord
 
         Args:
             request: Status update request
+            db: Database session
 
         Returns:
             Message record
         """
+        if not db:
+            return None
+
         try:
             # Get or determine channel ID
             channel_id = request.channel_id or await self._get_default_channel(
@@ -74,27 +80,26 @@ class DiscordService:
             )
 
             # Save to database
-            async with get_db_context() as db:
-                result = await db.execute(
-                    text("""
-                        INSERT INTO discord_messages
-                        (workspace_id, founder_id, message_type, channel_id, channel_name, message_content, status, embed_data)
-                        VALUES (:workspace_id, :founder_id, :message_type, :channel_id, :channel_name, :message_content, :status, :embed_data)
-                        RETURNING *
-                    """),
-                    {
-                        "workspace_id": str(message_create.workspace_id),
-                        "founder_id": str(message_create.founder_id),
-                        "message_type": message_create.message_type.value,
-                        "channel_id": message_create.channel_id,
-                        "channel_name": message_create.channel_name,
-                        "message_content": message_create.message_content,
-                        "status": message_create.status.value,
-                        "embed_data": message_create.embed_data
-                    }
-                )
-                await db.commit()
-                row = result.fetchone()
+            result = db.execute(
+                text("""
+                    INSERT INTO integrations.discord_messages
+                    (workspace_id, founder_id, message_type, channel_id, channel_name, message_content, status, embed_data)
+                    VALUES (:workspace_id, :founder_id, :message_type, :channel_id, :channel_name, :message_content, :status, :embed_data::jsonb)
+                    RETURNING *
+                """),
+                {
+                    "workspace_id": str(message_create.workspace_id),
+                    "founder_id": str(message_create.founder_id),
+                    "message_type": message_create.message_type.value,
+                    "channel_id": message_create.channel_id,
+                    "channel_name": message_create.channel_name,
+                    "message_content": message_create.message_content,
+                    "status": message_create.status.value,
+                    "embed_data": json.dumps(message_create.embed_data) if message_create.embed_data else None
+                }
+            )
+            db.commit()
+            row = result.fetchone()
 
             message_id = row.id
 
@@ -113,11 +118,12 @@ class DiscordService:
                     status=DiscordMessageStatus.SENT,
                     discord_message_id=discord_message_id,
                     sent_at=datetime.utcnow()
-                )
+                ),
+                db=db
             )
 
             # Get updated message
-            message = await self.get_message(message_id)
+            message = await self.get_message(message_id, db=db)
 
             self.logger.info(f"Posted status update to Discord channel {channel_id}")
             return message
@@ -130,42 +136,48 @@ class DiscordService:
                     DiscordMessageUpdate(
                         status=DiscordMessageStatus.FAILED,
                         error_message=str(e)
-                    )
+                    ),
+                    db=db
                 )
             return None
 
     async def send_briefing(
         self,
-        request: DiscordBriefingRequest
+        request: DiscordBriefingRequest,
+        db: Optional[Session] = None
     ) -> Optional[DiscordMessageResponse]:
         """
         Send a daily briefing to Discord
 
         Args:
             request: Briefing request
+            db: Database session
 
         Returns:
             Message record
         """
+        if not db:
+            return None
+
         try:
             # Get briefing
             if request.briefing_id:
                 # Get specific briefing
-                async with get_db_context() as db:
-                    result = await db.execute(
-                        text("SELECT * FROM briefings WHERE id = :id"),
-                        {"id": str(request.briefing_id)}
-                    )
-                    row = result.fetchone()
-                    if not row:
-                        raise ValueError(f"Briefing {request.briefing_id} not found")
-                    briefing = BriefingResponse(**dict(row))
+                result = db.execute(
+                    text("SELECT * FROM briefings.briefings WHERE id = :id"),
+                    {"id": str(request.briefing_id)}
+                )
+                row = result.fetchone()
+                if not row:
+                    raise ValueError(f"Briefing {request.briefing_id} not found")
+                briefing = BriefingResponse(**dict(row._mapping))
             else:
                 # Get latest morning briefing
                 briefing = await self.briefing_service.generate_briefing(
                     workspace_id=request.workspace_id,
                     founder_id=request.founder_id,
-                    briefing_type="morning"
+                    briefing_type="morning",
+                    db=db
                 )
 
             if not briefing:
@@ -197,27 +209,26 @@ class DiscordService:
             )
 
             # Save to database
-            async with get_db_context() as db:
-                result = await db.execute(
-                    text("""
-                        INSERT INTO discord_messages
-                        (workspace_id, founder_id, message_type, channel_id, channel_name, message_content, status, embed_data)
-                        VALUES (:workspace_id, :founder_id, :message_type, :channel_id, :channel_name, :message_content, :status, :embed_data)
-                        RETURNING *
-                    """),
-                    {
-                        "workspace_id": str(message_create.workspace_id),
-                        "founder_id": str(message_create.founder_id),
-                        "message_type": message_create.message_type.value,
-                        "channel_id": message_create.channel_id,
-                        "channel_name": message_create.channel_name,
-                        "message_content": message_create.message_content,
-                        "status": message_create.status.value,
-                        "embed_data": message_create.embed_data
-                    }
-                )
-                await db.commit()
-                row = result.fetchone()
+            result = db.execute(
+                text("""
+                    INSERT INTO integrations.discord_messages
+                    (workspace_id, founder_id, message_type, channel_id, channel_name, message_content, status, embed_data)
+                    VALUES (:workspace_id, :founder_id, :message_type, :channel_id, :channel_name, :message_content, :status, :embed_data::jsonb)
+                    RETURNING *
+                """),
+                {
+                    "workspace_id": str(message_create.workspace_id),
+                    "founder_id": str(message_create.founder_id),
+                    "message_type": message_create.message_type.value,
+                    "channel_id": message_create.channel_id,
+                    "channel_name": message_create.channel_name,
+                    "message_content": message_create.message_content,
+                    "status": message_create.status.value,
+                    "embed_data": json.dumps(message_create.embed_data)
+                }
+            )
+            db.commit()
+            row = result.fetchone()
 
             message_id = row.id
 
@@ -240,10 +251,11 @@ class DiscordService:
                     status=DiscordMessageStatus.SENT,
                     discord_message_id=discord_message_id,
                     sent_at=datetime.utcnow()
-                )
+                ),
+                db=db
             )
 
-            message = await self.get_message(message_id)
+            message = await self.get_message(message_id, db=db)
 
             self.logger.info(f"Sent briefing to Discord channel {channel_id}")
             return message
@@ -256,38 +268,45 @@ class DiscordService:
                     DiscordMessageUpdate(
                         status=DiscordMessageStatus.FAILED,
                         error_message=str(e)
-                    )
+                    ),
+                    db=db
                 )
             return None
 
-    async def get_message(self, message_id: UUID) -> Optional[DiscordMessageResponse]:
+    async def get_message(
+        self,
+        message_id: UUID,
+        db: Optional[Session] = None
+    ) -> Optional[DiscordMessageResponse]:
         """Get message by ID"""
+        if not db:
+            return None
+
         try:
-            async with get_db_context() as db:
-                result = await db.execute(
-                    text("SELECT * FROM discord_messages WHERE id = :id"),
-                    {"id": str(message_id)}
-                )
-                row = result.fetchone()
+            result = db.execute(
+                text("SELECT * FROM integrations.discord_messages WHERE id = :id"),
+                {"id": str(message_id)}
+            )
+            row = result.fetchone()
 
-                if not row:
-                    return None
+            if not row:
+                return None
 
-                return DiscordMessageResponse(
-                    id=row.id,
-                    workspace_id=UUID(row.workspace_id),
-                    founder_id=UUID(row.founder_id),
-                    message_type=DiscordMessageType(row.message_type),
-                    channel_id=row.channel_id,
-                    channel_name=row.channel_name,
-                    message_content=row.message_content,
-                    discord_message_id=row.discord_message_id,
-                    status=DiscordMessageStatus(row.status),
-                    embed_data=row.embed_data,
-                    error_message=row.error_message,
-                    sent_at=row.sent_at,
-                    created_at=row.created_at
-                )
+            return DiscordMessageResponse(
+                id=row.id,
+                workspace_id=UUID(row.workspace_id),
+                founder_id=UUID(row.founder_id),
+                message_type=DiscordMessageType(row.message_type),
+                channel_id=row.channel_id,
+                channel_name=row.channel_name,
+                message_content=row.message_content,
+                discord_message_id=row.discord_message_id,
+                status=DiscordMessageStatus(row.status),
+                embed_data=row.embed_data,
+                error_message=row.error_message,
+                sent_at=row.sent_at,
+                created_at=row.created_at
+            )
 
         except Exception as e:
             self.logger.error(f"Error getting message: {str(e)}")
@@ -400,9 +419,13 @@ class DiscordService:
     async def _update_message(
         self,
         message_id: UUID,
-        update: DiscordMessageUpdate
+        update: DiscordMessageUpdate,
+        db: Optional[Session] = None
     ):
         """Update message record"""
+        if not db:
+            return
+
         try:
             updates = []
             params = {"id": str(message_id)}
@@ -424,10 +447,9 @@ class DiscordService:
                 params["sent_at"] = update.sent_at
 
             if updates:
-                query = f"UPDATE discord_messages SET {', '.join(updates)} WHERE id = :id"
-                async with get_db_context() as db:
-                    await db.execute(text(query), params)
-                    await db.commit()
+                query = f"UPDATE integrations.discord_messages SET {', '.join(updates)} WHERE id = :id"
+                db.execute(text(query), params)
+                db.commit()
 
         except Exception as e:
             self.logger.error(f"Error updating message: {str(e)}")

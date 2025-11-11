@@ -19,7 +19,9 @@ from app.models.briefing import (
     InvestorSummaryContent
 )
 from app.models.founder import FounderResponse
-from app.database import get_supabase_client
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+import json
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,6 @@ class BriefingService:
     """Service for generating and managing briefings"""
 
     def __init__(self):
-        self.supabase = get_supabase_client()
         self.logger = logging.getLogger(__name__)
         self.templates_dir = Path(__file__).parent.parent / "templates" / "briefings"
 
@@ -39,7 +40,8 @@ class BriefingService:
         founder_id: UUID,
         briefing_type: BriefingType,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        db: Optional[Session] = None
     ) -> Optional[BriefingResponse]:
         """
         Generate a briefing
@@ -69,21 +71,21 @@ class BriefingService:
                     start_date = end_date - timedelta(days=1)
 
             # Get founder info
-            founder = await self._get_founder(founder_id)
+            founder = await self._get_founder(founder_id, db)
 
             # Generate content based on type
             if briefing_type == BriefingType.MORNING:
-                content = await self._generate_morning_brief(workspace_id, founder_id, founder)
+                content = await self._generate_morning_brief(workspace_id, founder_id, founder, db)
                 sections = self._create_morning_sections(content)
                 title = f"Morning Brief - {end_date.strftime('%B %d, %Y')}"
 
             elif briefing_type == BriefingType.EVENING:
-                content = await self._generate_evening_wrap(workspace_id, founder_id, founder, start_date, end_date)
+                content = await self._generate_evening_wrap(workspace_id, founder_id, founder, start_date, end_date, db)
                 sections = self._create_evening_sections(content)
                 title = f"Evening Wrap - {end_date.strftime('%B %d, %Y')}"
 
             elif briefing_type == BriefingType.INVESTOR:
-                content = await self._generate_investor_summary(workspace_id, founder_id, start_date, end_date)
+                content = await self._generate_investor_summary(workspace_id, founder_id, start_date, end_date, db)
                 sections = self._create_investor_sections(content)
                 title = f"Weekly Update - Week of {start_date.strftime('%B %d, %Y')}"
 
@@ -105,13 +107,31 @@ class BriefingService:
             )
 
             # Save briefing
-            result = self.supabase.table("briefings").insert(
-                briefing.model_dump(mode="json")
-            ).execute()
+            if db:
+                query = text("""
+                    INSERT INTO briefings.briefings
+                    (workspace_id, founder_id, briefing_type, title, start_date, end_date, sections, summary, key_highlights, action_items, status)
+                    VALUES (:workspace_id, :founder_id, :briefing_type, :title, :start_date, :end_date, :sections::jsonb, :summary, :key_highlights::jsonb, :action_items::jsonb, 'generated')
+                    RETURNING id, workspace_id, founder_id, briefing_type, title, start_date, end_date, status, created_at
+                """)
 
-            if result.data:
-                self.logger.info(f"Generated {briefing_type.value} briefing for founder {founder_id}")
-                return BriefingResponse(**result.data[0])
+                result = db.execute(query, {
+                    "workspace_id": str(workspace_id),
+                    "founder_id": str(founder_id),
+                    "briefing_type": briefing_type.value,
+                    "title": title,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "sections": json.dumps([s.model_dump(mode="json") for s in sections]),
+                    "summary": content.get("summary", ""),
+                    "key_highlights": json.dumps(content.get("highlights", [])),
+                    "action_items": json.dumps(content.get("action_items", []))
+                })
+                db.commit()
+                row = result.fetchone()
+                if row:
+                    self.logger.info(f"Generated {briefing_type.value} briefing for founder {founder_id}")
+                    return BriefingResponse(**dict(row._mapping))
 
             return None
 
@@ -123,27 +143,28 @@ class BriefingService:
         self,
         workspace_id: UUID,
         founder_id: UUID,
-        founder: Dict[str, Any]
+        founder: Dict[str, Any],
+        db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Generate morning brief content"""
         try:
             # Get today's schedule
-            schedule = await self._get_today_schedule(workspace_id, founder_id)
+            schedule = await self._get_today_schedule(workspace_id, founder_id, db)
 
             # Get overnight updates
-            overnight = await self._get_overnight_updates(workspace_id)
+            overnight = await self._get_overnight_updates(workspace_id, db)
 
             # Get KPI snapshot
-            kpis = await self._get_kpi_snapshot(workspace_id)
+            kpis = await self._get_kpi_snapshot(workspace_id, db)
 
             # Get urgent items
-            urgent = await self._get_urgent_items(workspace_id, founder_id)
+            urgent = await self._get_urgent_items(workspace_id, founder_id, db)
 
             # Get recommendations
-            recommendations = await self._get_top_recommendations(workspace_id, founder_id, limit=3)
+            recommendations = await self._get_top_recommendations(workspace_id, founder_id, limit=3, db=db)
 
             # Get unread counts
-            unread = await self._get_unread_summary(workspace_id)
+            unread = await self._get_unread_summary(workspace_id, db)
 
             return {
                 "founder_name": founder.get("display_name", ""),
@@ -168,27 +189,28 @@ class BriefingService:
         founder_id: UUID,
         founder: Dict[str, Any],
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Generate evening wrap content"""
         try:
             # Get today's meetings
-            meetings = await self._get_meetings_today(workspace_id, start_date, end_date)
+            meetings = await self._get_meetings_today(workspace_id, start_date, end_date, db)
 
             # Get completed tasks
-            completed = await self._get_completed_tasks(workspace_id, founder_id, start_date, end_date)
+            completed = await self._get_completed_tasks(workspace_id, founder_id, start_date, end_date, db)
 
             # Get pending tasks
-            pending = await self._get_pending_tasks(workspace_id, founder_id)
+            pending = await self._get_pending_tasks(workspace_id, founder_id, db)
 
             # Get KPI changes
-            kpi_changes = await self._get_kpi_changes(workspace_id, start_date, end_date)
+            kpi_changes = await self._get_kpi_changes(workspace_id, start_date, end_date, db)
 
             # Get new insights
-            insights = await self._get_new_insights(workspace_id, start_date, end_date)
+            insights = await self._get_new_insights(workspace_id, start_date, end_date, db)
 
             # Get tomorrow preview
-            tomorrow = await self._get_tomorrow_preview(workspace_id, founder_id)
+            tomorrow = await self._get_tomorrow_preview(workspace_id, founder_id, db)
 
             summary = f"Today you had {len(meetings)} meetings and completed {len(completed)} tasks."
 
@@ -214,21 +236,22 @@ class BriefingService:
         workspace_id: UUID,
         founder_id: UUID,
         start_date: datetime,
-        end_date: datetime
+        end_date: datetime,
+        db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Generate investor summary content"""
         try:
             # Get key metrics
-            key_metrics = await self._get_investor_metrics(workspace_id, start_date, end_date)
+            key_metrics = await self._get_investor_metrics(workspace_id, start_date, end_date, db)
 
             # Get growth highlights
-            growth = await self._get_growth_highlights(workspace_id, start_date, end_date)
+            growth = await self._get_growth_highlights(workspace_id, start_date, end_date, db)
 
             # Get challenges
-            challenges = await self._get_challenges(workspace_id, start_date, end_date)
+            challenges = await self._get_challenges(workspace_id, start_date, end_date, db)
 
             # Financial overview
-            financial = await self._get_financial_overview(workspace_id, start_date, end_date)
+            financial = await self._get_financial_overview(workspace_id, start_date, end_date, db)
 
             # Product updates (placeholder - would integrate with product tracking)
             product_updates = []
@@ -340,107 +363,126 @@ class BriefingService:
         return sections
 
     # Helper methods for data retrieval
-    async def _get_founder(self, founder_id: UUID) -> Dict[str, Any]:
+    async def _get_founder(self, founder_id: UUID, db: Optional[Session] = None) -> Dict[str, Any]:
         """Get founder information"""
         try:
-            result = self.supabase.table("founders").select("*").eq("id", str(founder_id)).single().execute()
-            return result.data or {}
+            if db:
+                query = text("SELECT * FROM founders.founders WHERE id = :founder_id")
+                result = db.execute(query, {"founder_id": str(founder_id)})
+                row = result.fetchone()
+                return dict(row._mapping) if row else {}
+            return {}
         except:
             return {}
 
-    async def _get_today_schedule(self, workspace_id: UUID, founder_id: UUID) -> List[Dict[str, Any]]:
+    async def _get_today_schedule(self, workspace_id: UUID, founder_id: UUID, db: Optional[Session] = None) -> List[Dict[str, Any]]:
         """Get today's meetings/events"""
         # Placeholder - would integrate with calendar
         return []
 
-    async def _get_overnight_updates(self, workspace_id: UUID) -> List[Dict[str, Any]]:
+    async def _get_overnight_updates(self, workspace_id: UUID, db: Optional[Session] = None) -> List[Dict[str, Any]]:
         """Get overnight updates"""
         return []
 
-    async def _get_kpi_snapshot(self, workspace_id: UUID) -> Dict[str, Any]:
+    async def _get_kpi_snapshot(self, workspace_id: UUID, db: Optional[Session] = None) -> Dict[str, Any]:
         """Get current KPI snapshot"""
         try:
-            result = self.supabase.table("kpi_metrics").select("*, kpi_data_points(*)").eq(
-                "workspace_id", str(workspace_id)
-            ).eq("is_active", True).execute()
-            return {"metrics": result.data or []}
+            if db:
+                query = text("""
+                    SELECT * FROM kpis.kpi_metrics
+                    WHERE workspace_id = :workspace_id AND is_active = true
+                """)
+                result = db.execute(query, {"workspace_id": str(workspace_id)})
+                metrics = [dict(row._mapping) for row in result.fetchall()]
+                return {"metrics": metrics}
+            return {}
         except:
             return {}
 
-    async def _get_urgent_items(self, workspace_id: UUID, founder_id: UUID) -> List[Dict[str, Any]]:
+    async def _get_urgent_items(self, workspace_id: UUID, founder_id: UUID, db: Optional[Session] = None) -> List[Dict[str, Any]]:
         """Get urgent items"""
         return []
 
     async def _get_top_recommendations(
-        self, workspace_id: UUID, founder_id: UUID, limit: int = 3
+        self, workspace_id: UUID, founder_id: UUID, limit: int = 3, db: Optional[Session] = None
     ) -> List[Dict[str, Any]]:
         """Get top recommendations"""
         try:
-            result = self.supabase.table("recommendations").select("*").eq(
-                "workspace_id", str(workspace_id)
-            ).eq("founder_id", str(founder_id)).eq(
-                "status", "pending"
-            ).order("priority").limit(limit).execute()
-            return result.data or []
+            if db:
+                query = text("""
+                    SELECT * FROM recommendations.recommendations
+                    WHERE workspace_id = :workspace_id
+                    AND founder_id = :founder_id
+                    AND status = 'pending'
+                    ORDER BY priority DESC
+                    LIMIT :limit
+                """)
+                result = db.execute(query, {
+                    "workspace_id": str(workspace_id),
+                    "founder_id": str(founder_id),
+                    "limit": limit
+                })
+                return [dict(row._mapping) for row in result.fetchall()]
+            return []
         except:
             return []
 
-    async def _get_unread_summary(self, workspace_id: UUID) -> Dict[str, int]:
+    async def _get_unread_summary(self, workspace_id: UUID, db: Optional[Session] = None) -> Dict[str, int]:
         """Get unread message counts"""
         return {}
 
     async def _get_meetings_today(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> List[Dict[str, Any]]:
         """Get today's meetings"""
         return []
 
     async def _get_completed_tasks(
-        self, workspace_id: UUID, founder_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, founder_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> List[Dict[str, Any]]:
         """Get completed tasks"""
         return []
 
-    async def _get_pending_tasks(self, workspace_id: UUID, founder_id: UUID) -> List[Dict[str, Any]]:
+    async def _get_pending_tasks(self, workspace_id: UUID, founder_id: UUID, db: Optional[Session] = None) -> List[Dict[str, Any]]:
         """Get pending tasks"""
         return []
 
     async def _get_kpi_changes(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Get KPI changes"""
         return {}
 
     async def _get_new_insights(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> List[Dict[str, Any]]:
         """Get new insights"""
         return []
 
-    async def _get_tomorrow_preview(self, workspace_id: UUID, founder_id: UUID) -> Dict[str, Any]:
+    async def _get_tomorrow_preview(self, workspace_id: UUID, founder_id: UUID, db: Optional[Session] = None) -> Dict[str, Any]:
         """Get tomorrow's preview"""
         return {}
 
     async def _get_investor_metrics(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Get investor-relevant metrics"""
         return {}
 
     async def _get_growth_highlights(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> List[str]:
         """Get growth highlights"""
         return []
 
     async def _get_challenges(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> List[str]:
         """Get current challenges"""
         return []
 
     async def _get_financial_overview(
-        self, workspace_id: UUID, start_date: datetime, end_date: datetime
+        self, workspace_id: UUID, start_date: datetime, end_date: datetime, db: Optional[Session] = None
     ) -> Dict[str, Any]:
         """Get financial overview"""
         return {}

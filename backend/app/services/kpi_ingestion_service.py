@@ -6,6 +6,9 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from uuid import UUID
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+import json
 
 from app.connectors.granola_connector import GranolaConnector
 from app.connectors.base_connector import ConnectorStatus, ConnectorError
@@ -20,7 +23,6 @@ from app.models.kpi_metric import (
     KPISnapshot,
     SyncStatus
 )
-from app.database import get_supabase_client
 
 
 logger = logging.getLogger(__name__)
@@ -104,13 +106,13 @@ class KPIIngestionService:
     }
 
     def __init__(self):
-        self.supabase = get_supabase_client()
         self.logger = logging.getLogger(__name__)
 
     async def initialize_standard_kpis(
         self,
         workspace_id: UUID,
-        source_platform: str = "granola"
+        source_platform: str = "granola",
+        db: Optional[Session] = None
     ) -> List[KPIMetricResponse]:
         """
         Initialize standard KPI definitions for a workspace
@@ -118,22 +120,32 @@ class KPIIngestionService:
         Args:
             workspace_id: Workspace ID
             source_platform: Source platform name
+            db: Database session
 
         Returns:
             List of created KPI metrics
         """
         created_metrics = []
 
+        if not db:
+            return created_metrics
+
         for kpi_key, kpi_def in self.STANDARD_KPIS.items():
             try:
                 # Check if metric already exists
-                existing = self.supabase.table("kpi_metrics").select("*").eq(
-                    "workspace_id", str(workspace_id)
-                ).eq("name", kpi_def["name"]).execute()
+                existing_query = text("""
+                    SELECT * FROM kpis.kpi_metrics
+                    WHERE workspace_id = :workspace_id AND name = :name
+                """)
+                existing_result = db.execute(existing_query, {
+                    "workspace_id": str(workspace_id),
+                    "name": kpi_def["name"]
+                })
+                existing_row = existing_result.fetchone()
 
-                if existing.data:
+                if existing_row:
                     self.logger.info(f"Metric {kpi_def['name']} already exists for workspace {workspace_id}")
-                    created_metrics.append(KPIMetricResponse(**existing.data[0]))
+                    created_metrics.append(KPIMetricResponse(**dict(existing_row._mapping)))
                     continue
 
                 # Create new metric
@@ -143,12 +155,26 @@ class KPIIngestionService:
                     **kpi_def
                 )
 
-                result = self.supabase.table("kpi_metrics").insert(
-                    metric_data.model_dump(mode="json")
-                ).execute()
+                insert_query = text("""
+                    INSERT INTO kpis.kpi_metrics
+                    (workspace_id, source_platform, name, display_name, category, unit, description)
+                    VALUES (:workspace_id, :source_platform, :name, :display_name, :category, :unit, :description)
+                    RETURNING *
+                """)
+                result = db.execute(insert_query, {
+                    "workspace_id": str(metric_data.workspace_id),
+                    "source_platform": metric_data.source_platform,
+                    "name": metric_data.name,
+                    "display_name": metric_data.display_name,
+                    "category": metric_data.category.value,
+                    "unit": metric_data.unit.value,
+                    "description": metric_data.description
+                })
+                db.commit()
 
-                if result.data:
-                    created_metrics.append(KPIMetricResponse(**result.data[0]))
+                row = result.fetchone()
+                if row:
+                    created_metrics.append(KPIMetricResponse(**dict(row._mapping)))
                     self.logger.info(f"Created metric {kpi_def['name']} for workspace {workspace_id}")
 
             except Exception as e:
@@ -160,7 +186,8 @@ class KPIIngestionService:
         self,
         workspace_id: UUID,
         credentials: Dict[str, Any],
-        metrics_to_sync: Optional[List[str]] = None
+        metrics_to_sync: Optional[List[str]] = None,
+        db: Optional[Session] = None
     ) -> SyncStatus:
         """
         Sync KPI data from Granola
@@ -169,6 +196,7 @@ class KPIIngestionService:
             workspace_id: Workspace ID
             credentials: Granola API credentials
             metrics_to_sync: Optional list of specific metrics to sync (default: all)
+            db: Database session
 
         Returns:
             SyncStatus with sync results
@@ -176,6 +204,15 @@ class KPIIngestionService:
         sync_start = datetime.utcnow()
         metrics_synced = 0
         errors = []
+
+        if not db:
+            return SyncStatus(
+                workspace_id=workspace_id,
+                last_sync_at=sync_start,
+                status="error",
+                metrics_synced=0,
+                errors=["Database session not provided"]
+            )
 
         try:
             # Initialize Granola connector
@@ -194,14 +231,16 @@ class KPIIngestionService:
                 kpis_data = kpi_response.data
 
                 # Ensure standard metrics exist
-                await self.initialize_standard_kpis(workspace_id)
+                await self.initialize_standard_kpis(workspace_id, db=db)
 
                 # Get metric definitions from database
-                metrics_result = self.supabase.table("kpi_metrics").select("*").eq(
-                    "workspace_id", str(workspace_id)
-                ).execute()
-
-                metric_map = {m["name"]: m for m in metrics_result.data}
+                metrics_query = text("""
+                    SELECT * FROM kpis.kpi_metrics
+                    WHERE workspace_id = :workspace_id
+                """)
+                metrics_result = db.execute(metrics_query, {"workspace_id": str(workspace_id)})
+                metric_rows = metrics_result.fetchall()
+                metric_map = {m["name"]: dict(m._mapping) for m in metric_rows}
 
                 # Process each KPI
                 for kpi_name, kpi_value in kpis_data.items():
@@ -239,11 +278,24 @@ class KPIIngestionService:
                         )
 
                         # Insert data point
-                        result = self.supabase.table("kpi_data_points").insert(
-                            data_point.model_dump(mode="json")
-                        ).execute()
+                        insert_query = text("""
+                            INSERT INTO kpis.kpi_data_points
+                            (metric_id, workspace_id, value, timestamp, period, metadata)
+                            VALUES (:metric_id, :workspace_id, :value, :timestamp, :period, :metadata::jsonb)
+                            RETURNING *
+                        """)
+                        result = db.execute(insert_query, {
+                            "metric_id": str(data_point.metric_id),
+                            "workspace_id": str(data_point.workspace_id),
+                            "value": data_point.value,
+                            "timestamp": data_point.timestamp,
+                            "period": data_point.period.value,
+                            "metadata": json.dumps(data_point.metadata)
+                        })
+                        db.commit()
 
-                        if result.data:
+                        row = result.fetchone()
+                        if row:
                             metrics_synced += 1
                             self.logger.info(f"Synced {kpi_name}: {value}")
 
@@ -253,7 +305,7 @@ class KPIIngestionService:
                         errors.append(error_msg)
 
                 # Calculate derived metrics
-                await self._calculate_derived_metrics(workspace_id, metric_map)
+                await self._calculate_derived_metrics(workspace_id, metric_map, db=db)
 
                 # Update sync status
                 sync_status = SyncStatus(
@@ -270,10 +322,29 @@ class KPIIngestionService:
                 )
 
                 # Store sync status
-                self.supabase.table("kpi_sync_status").upsert({
+                upsert_query = text("""
+                    INSERT INTO kpis.kpi_sync_status
+                    (workspace_id, last_sync_at, next_sync_at, status, metrics_synced, errors, metadata)
+                    VALUES (:workspace_id, :last_sync_at, :next_sync_at, :status, :metrics_synced, :errors::jsonb, :metadata::jsonb)
+                    ON CONFLICT (workspace_id)
+                    DO UPDATE SET
+                        last_sync_at = EXCLUDED.last_sync_at,
+                        next_sync_at = EXCLUDED.next_sync_at,
+                        status = EXCLUDED.status,
+                        metrics_synced = EXCLUDED.metrics_synced,
+                        errors = EXCLUDED.errors,
+                        metadata = EXCLUDED.metadata
+                """)
+                db.execute(upsert_query, {
                     "workspace_id": str(workspace_id),
-                    **sync_status.model_dump(mode="json", exclude={"workspace_id"})
-                }).execute()
+                    "last_sync_at": sync_status.last_sync_at,
+                    "next_sync_at": sync_status.next_sync_at,
+                    "status": sync_status.status,
+                    "metrics_synced": sync_status.metrics_synced,
+                    "errors": json.dumps(sync_status.errors),
+                    "metadata": json.dumps(sync_status.metadata)
+                })
+                db.commit()
 
                 return sync_status
 
@@ -290,7 +361,8 @@ class KPIIngestionService:
     async def _calculate_derived_metrics(
         self,
         workspace_id: UUID,
-        metric_map: Dict[str, Any]
+        metric_map: Dict[str, Any],
+        db: Optional[Session] = None
     ) -> None:
         """
         Calculate derived metrics from base metrics
@@ -298,25 +370,34 @@ class KPIIngestionService:
         Args:
             workspace_id: Workspace ID
             metric_map: Map of metric names to metric definitions
+            db: Database session
         """
+        if not db:
+            return
+
         try:
             # Calculate LTV:CAC ratio if both metrics exist
             if "ltv" in metric_map and "cac" in metric_map:
                 ltv_metric = metric_map["ltv"]
                 cac_metric = metric_map["cac"]
 
-                # Get latest values
-                ltv_data = self.supabase.table("kpi_data_points").select("value").eq(
-                    "metric_id", ltv_metric["id"]
-                ).order("timestamp", desc=True).limit(1).execute()
+                # Get latest LTV value
+                ltv_query = text("""
+                    SELECT value FROM kpis.kpi_data_points
+                    WHERE metric_id = :metric_id
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """)
+                ltv_result = db.execute(ltv_query, {"metric_id": ltv_metric["id"]})
+                ltv_row = ltv_result.fetchone()
 
-                cac_data = self.supabase.table("kpi_data_points").select("value").eq(
-                    "metric_id", cac_metric["id"]
-                ).order("timestamp", desc=True).limit(1).execute()
+                # Get latest CAC value
+                cac_result = db.execute(ltv_query, {"metric_id": cac_metric["id"]})
+                cac_row = cac_result.fetchone()
 
-                if ltv_data.data and cac_data.data:
-                    ltv_value = ltv_data.data[0]["value"]
-                    cac_value = cac_data.data[0]["value"]
+                if ltv_row and cac_row:
+                    ltv_value = ltv_row["value"]
+                    cac_value = cac_row["value"]
 
                     if cac_value > 0:
                         ratio = ltv_value / cac_value
@@ -336,49 +417,78 @@ class KPIIngestionService:
                                 }
                             )
 
-                            self.supabase.table("kpi_data_points").insert(
-                                data_point.model_dump(mode="json")
-                            ).execute()
+                            insert_query = text("""
+                                INSERT INTO kpis.kpi_data_points
+                                (metric_id, workspace_id, value, timestamp, period, metadata)
+                                VALUES (:metric_id, :workspace_id, :value, :timestamp, :period, :metadata::jsonb)
+                            """)
+                            db.execute(insert_query, {
+                                "metric_id": str(data_point.metric_id),
+                                "workspace_id": str(data_point.workspace_id),
+                                "value": data_point.value,
+                                "timestamp": data_point.timestamp,
+                                "period": data_point.period.value,
+                                "metadata": json.dumps(data_point.metadata)
+                            })
+                            db.commit()
 
         except Exception as e:
             self.logger.error(f"Error calculating derived metrics: {str(e)}")
 
     async def get_current_snapshot(
         self,
-        workspace_id: UUID
+        workspace_id: UUID,
+        db: Optional[Session] = None
     ) -> KPISnapshot:
         """
         Get current snapshot of all KPIs
 
         Args:
             workspace_id: Workspace ID
+            db: Database session
 
         Returns:
             KPISnapshot with current values
         """
         try:
+            if not db:
+                return KPISnapshot(
+                    workspace_id=workspace_id,
+                    timestamp=datetime.utcnow(),
+                    metrics=[],
+                    metadata={"error": "Database session not provided"}
+                )
+
             # Get all metrics for workspace
-            metrics_result = self.supabase.table("kpi_metrics").select("*").eq(
-                "workspace_id", str(workspace_id)
-            ).eq("is_active", True).execute()
+            metrics_query = text("""
+                SELECT * FROM kpis.kpi_metrics
+                WHERE workspace_id = :workspace_id AND is_active = true
+            """)
+            metrics_result = db.execute(metrics_query, {"workspace_id": str(workspace_id)})
+            metric_rows = metrics_result.fetchall()
 
             metrics = []
 
-            for metric in metrics_result.data:
+            for metric in metric_rows:
                 # Get latest data point
-                data_point = self.supabase.table("kpi_data_points").select("*").eq(
-                    "metric_id", metric["id"]
-                ).order("timestamp", desc=True).limit(1).execute()
+                data_point_query = text("""
+                    SELECT * FROM kpis.kpi_data_points
+                    WHERE metric_id = :metric_id
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """)
+                data_point_result = db.execute(data_point_query, {"metric_id": metric["id"]})
+                data_point_row = data_point_result.fetchone()
 
-                if data_point.data:
+                if data_point_row:
                     metrics.append({
                         "metric_id": metric["id"],
                         "name": metric["name"],
                         "display_name": metric["display_name"],
                         "category": metric["category"],
                         "unit": metric["unit"],
-                        "value": data_point.data[0]["value"],
-                        "timestamp": data_point.data[0]["timestamp"]
+                        "value": data_point_row["value"],
+                        "timestamp": data_point_row["timestamp"]
                     })
 
             return KPISnapshot(
@@ -404,7 +514,8 @@ class KPIIngestionService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         period: AggregationPeriod = AggregationPeriod.DAILY,
-        limit: int = 100
+        limit: int = 100,
+        db: Optional[Session] = None
     ) -> List[KPIDataPointResponse]:
         """
         Get historical data for a metric
@@ -416,23 +527,47 @@ class KPIIngestionService:
             end_date: End date filter
             period: Aggregation period
             limit: Maximum number of data points
+            db: Database session
 
         Returns:
             List of KPI data points
         """
         try:
-            query = self.supabase.table("kpi_data_points").select("*").eq(
-                "metric_id", str(metric_id)
-            ).eq("workspace_id", str(workspace_id)).eq("period", period)
+            if not db:
+                return []
+
+            # Build query with filters
+            conditions = [
+                "metric_id = :metric_id",
+                "workspace_id = :workspace_id",
+                "period = :period"
+            ]
+            params = {
+                "metric_id": str(metric_id),
+                "workspace_id": str(workspace_id),
+                "period": period.value,
+                "limit": limit
+            }
 
             if start_date:
-                query = query.gte("timestamp", start_date.isoformat())
+                conditions.append("timestamp >= :start_date")
+                params["start_date"] = start_date
+
             if end_date:
-                query = query.lte("timestamp", end_date.isoformat())
+                conditions.append("timestamp <= :end_date")
+                params["end_date"] = end_date
 
-            result = query.order("timestamp", desc=True).limit(limit).execute()
+            query = text(f"""
+                SELECT * FROM kpis.kpi_data_points
+                WHERE {' AND '.join(conditions)}
+                ORDER BY timestamp DESC
+                LIMIT :limit
+            """)
 
-            return [KPIDataPointResponse(**dp) for dp in result.data]
+            result = db.execute(query, params)
+            rows = result.fetchall()
+
+            return [KPIDataPointResponse(**dict(row._mapping)) for row in rows]
 
         except Exception as e:
             self.logger.error(f"Error getting metric history: {str(e)}")
