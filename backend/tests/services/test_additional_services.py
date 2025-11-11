@@ -11,10 +11,10 @@ from app.services.kpi_ingestion_service import KPIIngestionService
 from app.services.anomaly_detection_service import AnomalyDetectionService
 from app.services.briefing_service import BriefingService
 from app.services.recommendation_service import RecommendationService
-from app.models.kpi import KPIMetricCreate, KPIDataPointCreate
-from app.models.anomaly import AnomalyType, AnomalySeverity, AnomalyStatus
-from app.models.briefing import BriefingType
-from app.models.recommendation import RecommendationCategory, RecommendationPriority
+from app.models.kpi_metric import KPIMetricCreate
+# from app.models.anomaly import AnomalyType, AnomalySeverity
+# from app.models.briefing import BriefingType
+# from app.models.recommendation import RecommendationPriority
 
 
 # ==================== KPI INGESTION SERVICE TESTS ====================

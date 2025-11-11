@@ -414,3 +414,13 @@ async def execute_rpc(
     except Exception as e:
         logger.error(f"RPC call failed: {str(e)}")
         raise
+
+
+def get_supabase_client():
+    """
+    Legacy function for backward compatibility with older services
+    Returns None as Supabase has been replaced with ZeroDB
+    Services should use ZeroDB client instead
+    """
+    logger.warning("get_supabase_client called - this is deprecated, use ZeroDB client instead")
+    return None
