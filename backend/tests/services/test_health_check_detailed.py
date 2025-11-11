@@ -61,7 +61,7 @@ async def test_check_integration_health_success(health_service, integration_id, 
     """Test successful integration health check"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": {}
@@ -74,7 +74,7 @@ async def test_check_integration_health_success(health_service, integration_id, 
         result = await health_service.check_integration_health(integration_id, test_connection=True)
 
     assert result.is_healthy is True
-    assert result.platform == Platform.GITHUB
+    assert result.platform == Platform.SLACK
     assert result.error_message is None
 
 
@@ -116,7 +116,7 @@ async def test_check_integration_health_without_testing(health_service, integrat
     """Test health check without connection testing"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "metadata": {}
     })
@@ -179,7 +179,7 @@ async def test_check_all_integrations_health_success(health_service, workspace_i
     mock_integrations = [
         Mock(_mapping={
             "id": str(uuid4()),
-            "platform": "github",
+            "platform": "slack",
             "status": "connected",
             "metadata": {}
         }),
@@ -195,7 +195,7 @@ async def test_check_all_integrations_health_success(health_service, workspace_i
     with patch.object(health_service, 'check_integration_health', new_callable=AsyncMock) as mock_check:
         mock_check.return_value = Mock(
             is_healthy=True,
-            platform=Platform.GITHUB,
+            platform=Platform.SLACK,
             status=IntegrationStatus.CONNECTED
         )
 
@@ -226,7 +226,7 @@ async def test_check_all_integrations_health_partial_failures(health_service, wo
     with patch.object(health_service, 'check_integration_health', new_callable=AsyncMock) as mock_check:
         # First succeeds, second fails
         mock_check.side_effect = [
-            Mock(is_healthy=True, platform=Platform.GITHUB),
+            Mock(is_healthy=True, platform=Platform.SLACK),
             Exception("Connection failed")
         ]
 
@@ -244,7 +244,7 @@ async def test_get_health_dashboard_success(health_service, workspace_id, mock_d
     if hasattr(health_service, 'get_health_dashboard'):
         with patch.object(health_service, 'check_all_integrations_health', new_callable=AsyncMock) as mock_check:
             mock_check.return_value = [
-                Mock(is_healthy=True, platform=Platform.GITHUB, status=IntegrationStatus.CONNECTED),
+                Mock(is_healthy=True, platform=Platform.SLACK, status=IntegrationStatus.CONNECTED),
                 Mock(is_healthy=False, platform=Platform.SLACK, status=IntegrationStatus.ERROR)
             ]
 
@@ -272,7 +272,7 @@ async def test_update_integration_status(health_service, integration_id, mock_db
     """Test updating integration status after health check"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": {}
@@ -293,7 +293,7 @@ async def test_update_metadata_on_health_check(health_service, integration_id, m
     """Test that metadata is updated with health check results"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": {"existing": "data"}
@@ -318,7 +318,7 @@ async def test_log_health_check_event(health_service, integration_id):
     if hasattr(health_service, '_log_health_check_event'):
         await health_service._log_health_check_event(
             integration_id=integration_id,
-            platform=Platform.GITHUB,
+            platform=Platform.SLACK,
             is_healthy=True,
             error_message=None
         )
@@ -348,7 +348,7 @@ async def test_check_github_integration(health_service, integration_id, mock_db)
     """Test health check for GitHub integration"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": {}
@@ -360,7 +360,7 @@ async def test_check_github_integration(health_service, integration_id, mock_db)
 
         result = await health_service.check_integration_health(integration_id, test_connection=True)
 
-    assert result.platform == Platform.GITHUB
+    assert result.platform == Platform.SLACK
 
 
 @pytest.mark.asyncio
@@ -390,7 +390,7 @@ async def test_check_integration_health_connection_test_exception(health_service
     """Test handling exception during connection test"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": {}
@@ -411,7 +411,7 @@ async def test_check_integration_health_credentials_decrypt_error(health_service
     """Test handling credentials decryption error"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "invalid_encrypted_data",
         "metadata": {}
@@ -452,7 +452,7 @@ async def test_check_integration_with_null_metadata(health_service, integration_
     """Test health check with null metadata"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "connected",
         "credentials_enc": "encrypted_creds",
         "metadata": None  # Null metadata
@@ -472,7 +472,7 @@ async def test_check_integration_with_invalid_status(health_service, integration
     """Test health check with invalid status"""
     mock_integration = Mock(_mapping={
         "id": str(integration_id),
-        "platform": "github",
+        "platform": "slack",
         "status": "invalid_status",
         "metadata": {}
     })

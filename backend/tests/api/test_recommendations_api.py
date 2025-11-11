@@ -63,7 +63,7 @@ def sample_recommendation():
         "rationale": "Based on recent KPI analysis",
         "priority": RecommendationPriority.HIGH.value,
         "confidence_score": 0.85,
-        "status": RecommendationStatus.ACTIVE.value,
+        "status": RecommendationStatus.PENDING.value,
         "impact_estimate": "high",
         "created_at": datetime.utcnow().isoformat()
     }
@@ -106,7 +106,7 @@ class TestListRecommendations:
                 "workspace_id": str(workspace_id),
                 "founder_id": str(founder_id),
                 "recommendation_type": [RecommendationType.PRODUCT.value],
-                "status": [RecommendationStatus.ACTIVE.value],
+                "status": [RecommendationStatus.PENDING.value],
                 "priority": [RecommendationPriority.HIGH.value],
                 "min_confidence": 0.8
             }
@@ -193,7 +193,7 @@ class TestGenerateRecommendations:
             "workspace_id": str(workspace_id),
             "founder_id": str(founder_id),
             "time_range_days": 7,
-            "focus_areas": [RecommendationType.GROWTH.value, RecommendationType.SALES.value],
+            "focus_areas": [RecommendationType.PRODUCT.value, RecommendationType.SALES.value],
             "min_confidence": 0.9
         }
         

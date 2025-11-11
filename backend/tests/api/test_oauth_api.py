@@ -52,7 +52,7 @@ def mock_integration_service():
         mock_integration = MagicMock()
         mock_integration.id = uuid4()
         mock_integration.platform = Platform.ZOOM
-        mock_integration.status = IntegrationStatus.ACTIVE
+        mock_integration.status = IntegrationStatus.CONNECTED
         mock_integration.metadata = {
             "access_token": "token_123",
             "refresh_token": "refresh_456"

@@ -307,7 +307,7 @@ class TestFeedbackService:
             workspace_id=workspace_id,
             founder_id=founder_id,
             feedback_type=FeedbackType.BUG_REPORT,
-            category=FeedbackCategory.PLATFORM,
+            category=FeedbackCategory.INTEGRATIONS,
             title="Bug in dashboard",
             description="Dashboard showing incorrect data",
             rating=2
@@ -334,7 +334,7 @@ class TestFeedbackService:
             workspace_id=workspace_id,
             founder_id=founder_id,
             feedback_type=FeedbackType.COMPLAINT,
-            category=FeedbackCategory.PLATFORM,
+            category=FeedbackCategory.INTEGRATIONS,
             title="Critical issue",
             description="System is completely broken and unusable",
             rating=1

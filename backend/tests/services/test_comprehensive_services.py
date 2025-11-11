@@ -265,8 +265,8 @@ class TestFeedbackService:
         request = MagicMock()
         request.workspace_id = uuid4()
         request.founder_id = uuid4()
-        request.feedback_type = FeedbackType.BUG
-        request.category = FeedbackCategory.UI
+        request.feedback_type = FeedbackType.BUG_REPORT
+        request.category = FeedbackCategory.UI_UX
         request.title = "Test Bug"
         request.description = "Test description"
         

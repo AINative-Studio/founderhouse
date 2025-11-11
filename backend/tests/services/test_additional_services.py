@@ -14,7 +14,7 @@ from app.services.recommendation_service import RecommendationService
 from app.models.kpi_metric import KPIMetricCreate
 # from app.models.anomaly import AnomalyType, AnomalySeverity
 # from app.models.briefing import BriefingType
-# from app.models.recommendation import RecommendationPriority
+from app.models.recommendation import RecommendationPriority, RecommendationType
 
 
 # ==================== KPI INGESTION SERVICE TESTS ====================
@@ -349,7 +349,7 @@ class TestRecommendationService:
             if hasattr(service, 'get_recommendations'):
                 recommendations = await service.get_recommendations(
                     workspace_id=workspace_id,
-                    category=RecommendationCategory.GROWTH
+                    category=RecommendationType.PRODUCT
                 )
                 assert isinstance(recommendations, list)
 

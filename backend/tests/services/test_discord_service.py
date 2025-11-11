@@ -75,7 +75,7 @@ class TestDiscordService:
             key_highlights=["Revenue up 15%", "New customer signed"],
             action_items=["Review Q1 budget", "Prepare investor update"],
             sections=[],
-            status=BriefingStatus.COMPLETED,
+            status=BriefingStatus.READY,
             created_at=datetime.utcnow()
         )
 
