@@ -481,6 +481,26 @@ async def test_ingest_from_otter_duplicate(service, workspace_id, founder_id):
         assert is_duplicate is True
 
 
+@pytest.mark.asyncio
+async def test_ingest_from_otter_api_error(service, workspace_id, founder_id):
+    """Test Otter ingestion with API error"""
+    with patch('app.services.meeting_ingestion_service.OtterConnector') as MockConnector:
+        mock_otter = AsyncMock()
+        mock_otter.__aenter__.return_value = mock_otter
+        mock_otter.__aexit__.return_value = None
+        mock_otter.get_speech_transcript.side_effect = Exception("API connection failed")
+
+        MockConnector.return_value = mock_otter
+
+        with pytest.raises(Exception, match="API connection failed"):
+            await service.ingest_from_otter(
+                workspace_id=workspace_id,
+                founder_id=founder_id,
+                speech_id="otter-speech-456",
+                credentials={"api_key": "test_key"}
+            )
+
+
 # ==================== HELPER METHOD TESTS ====================
 
 def test_generate_meeting_hash(service):
