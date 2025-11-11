@@ -11,6 +11,7 @@ from app.api.v1 import (
     insights,
     agents,
     briefings,
+    kpis,
     discord,
     feedback,
     loom,
@@ -29,6 +30,7 @@ api_router.include_router(meetings.router, tags=["meetings"])
 api_router.include_router(insights.router, tags=["insights"])
 api_router.include_router(agents.router, tags=["agents"])
 api_router.include_router(briefings.router, tags=["briefings"])
+api_router.include_router(kpis.router, tags=["kpis"])
 api_router.include_router(discord.router, tags=["discord"])
 api_router.include_router(feedback.router, tags=["feedback"])
 api_router.include_router(loom.router, tags=["loom"])
