@@ -60,3 +60,8 @@ temp/
 # Documentation builds
 docs/_build/
 site/
+
+# CI/CD workflows (require workflow scope to push)
+.github/workflows/
+.github/labeler.yml
+.github/CICD_SETUP.md
