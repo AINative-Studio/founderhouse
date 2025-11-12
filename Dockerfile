@@ -28,22 +28,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Create non-root user for security first
+RUN useradd -m -u 1000 appuser
 
-# Add local bin to PATH
-ENV PATH=/root/.local/bin:$PATH
+# Copy Python packages from builder to appuser's home with proper ownership
+COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
-# Copy application code
-COPY backend/ .
-
-# Create non-root user for security
-RUN useradd -m -u 1000 appuser && \
-    chown -R appuser:appuser /app && \
-    chown -R appuser:appuser /root/.local
+# Copy application code with proper ownership
+COPY --chown=appuser:appuser backend/ .
 
 # Switch to non-root user
 USER appuser
+
+# Add local bin to PATH for appuser
+ENV PATH=/home/appuser/.local/bin:$PATH
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
