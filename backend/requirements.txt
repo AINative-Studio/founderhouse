@@ -65,8 +65,8 @@ langchain-anthropic==0.1.20  # Upgraded to support anthropic>=0.18.0
 # OpenAI
 openai==1.12.0
 
-# Anthropic
-anthropic==0.18.1
+# Anthropic (compatible with langchain-anthropic 0.1.20 which requires >=0.28.0)
+anthropic==0.34.0
 
 # Token counting
 tiktoken==0.5.2
