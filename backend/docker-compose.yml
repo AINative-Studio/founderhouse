@@ -1,12 +1,13 @@
 version: '3.8'
 
 services:
-  api:
+  backend:
     build:
       context: .
       dockerfile: Dockerfile
+    container_name: backend
     ports:
-      - "8000:8000"
+      - "9000:9000"
     env_file:
       - .env
     environment:
@@ -20,6 +21,7 @@ services:
     networks:
       - app-network
     restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 9000 --reload
 
   postgres:
     image: postgres:15-alpine
@@ -46,9 +48,50 @@ services:
       - app-network
     restart: unless-stopped
 
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - app-network
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Grafana for metrics visualization
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - app-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   app-network:

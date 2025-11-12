@@ -1,0 +1,47 @@
+global:
+  scrape_interval: 15s  # How frequently to scrape targets
+  evaluation_interval: 15s  # How frequently to evaluate rules
+  external_labels:
+    cluster: 'ai-chief-of-staff'
+    env: 'development'
+
+# Alertmanager configuration (optional)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+          # - 'alertmanager:9093'
+
+# Load rules once and periodically evaluate them
+rule_files:
+  # - "alerts/*.yml"
+
+# Scrape configurations
+scrape_configs:
+  # AI Chief of Staff Backend API
+  - job_name: 'ai-chief-of-staff-backend'
+    metrics_path: '/api/v1/metrics'
+    static_configs:
+      - targets: ['backend:9000']  # Using docker-compose service name
+        labels:
+          service: 'backend'
+          app: 'ai-chief-of-staff'
+    # Optional: Add basic auth if metrics endpoint is protected
+    # basic_auth:
+    #   username: 'prometheus'
+    #   password: 'secret'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # Node Exporter (optional - for system metrics)
+  # Uncomment to enable system-level metrics
+  # - job_name: 'node'
+  #   static_configs:
+  #     - targets: ['node-exporter:9100']
+  #       labels:
+  #         service: 'node-exporter'

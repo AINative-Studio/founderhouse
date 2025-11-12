@@ -16,6 +16,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import get_settings
 from app.api.v1 import api_router
 from app.database import db_manager
+from app.middleware.metrics import PrometheusMiddleware
+from app.core.monitoring import set_app_info
 
 # Configure logging
 settings = get_settings()
@@ -39,6 +41,14 @@ async def lifespan(app: FastAPI):
     logger.info("Starting AI Chief of Staff API")
     logger.info(f"Environment: {settings.environment}")
     logger.info(f"Debug mode: {settings.debug}")
+
+    # Initialize Prometheus metrics
+    set_app_info(
+        name=settings.app_name,
+        version=settings.app_version,
+        environment=settings.environment
+    )
+    logger.info("Prometheus metrics initialized")
 
     # Initialize database connection
     try:
@@ -133,6 +143,9 @@ app.add_middleware(
 
 # Add GZip compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+# Add Prometheus metrics middleware
+app.add_middleware(PrometheusMiddleware)
 
 
 # Exception handlers

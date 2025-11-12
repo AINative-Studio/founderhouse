@@ -16,7 +16,8 @@ from app.api.v1 import (
     feedback,
     loom,
     recommendations,
-    voice
+    voice,
+    metrics
 )
 
 api_router = APIRouter()
@@ -36,3 +37,4 @@ api_router.include_router(feedback.router, tags=["feedback"])
 api_router.include_router(loom.router, tags=["loom"])
 api_router.include_router(recommendations.router, tags=["recommendations"])
 api_router.include_router(voice.router, tags=["voice"])
+api_router.include_router(metrics.router, tags=["monitoring"])
