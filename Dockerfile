@@ -34,6 +34,10 @@ RUN useradd -m -u 1000 appuser
 # Copy Python packages from builder to appuser's home with proper ownership
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
+# Copy entrypoint script and make it executable
+COPY --chown=appuser:appuser docker-entrypoint.sh /home/appuser/docker-entrypoint.sh
+RUN chmod +x /home/appuser/docker-entrypoint.sh
+
 # Copy application code with proper ownership
 COPY --chown=appuser:appuser backend/ .
 
@@ -48,7 +52,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Expose port (Railway uses dynamic ports)
-EXPOSE ${PORT:-8000}
+EXPOSE 8000
 
-# Run the application (use shell form to expand environment variables)
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Run the application using entrypoint script
+ENTRYPOINT ["/home/appuser/docker-entrypoint.sh"]
