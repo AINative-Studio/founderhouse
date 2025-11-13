@@ -56,11 +56,11 @@ mypy==1.8.0
 mkdocs==1.5.3
 mkdocs-material==9.5.9
 
-# LangChain and LLM providers
-langchain==0.1.6
-langchain-core==0.1.23
-langchain-openai==0.0.5
-langchain-anthropic==0.1.20  # Upgraded to support anthropic>=0.18.0
+# LangChain and LLM providers (upgraded for compatibility)
+langchain==0.2.16  # Supports langchain-core 0.2.x
+langchain-core==0.2.38  # Required by langchain-anthropic 0.1.20
+langchain-openai==0.1.25  # Supports langchain-core 0.2.x
+langchain-anthropic==0.1.20  # Requires langchain-core>=0.2.17 and anthropic>=0.28.0
 
 # OpenAI
 openai==1.12.0
