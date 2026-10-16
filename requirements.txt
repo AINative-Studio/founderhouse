@@ -16,14 +16,14 @@ pgvector==0.2.5
 # Authentication & Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
-python-multipart==0.0.9
+python-multipart==0.0.31
 
 # HTTP Client
 httpx==0.25.2  # Compatible with supabase (<0.26 and >=0.24)
-aiohttp==3.9.3
+aiohttp==3.14.5
 
 # Environment & Configuration
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 
 # Logging & Monitoring
 structlog==24.1.0
